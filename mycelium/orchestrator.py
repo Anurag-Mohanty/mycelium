@@ -28,6 +28,7 @@ from .genesis import run_genesis
 from .planner import create_plan
 from .survey import ProgrammaticSurvey
 from .node import run_node
+from .worker import WorkerNode
 from .synthesizer import synthesize
 from .validator import validate_finding
 from .significance import assess_significance
@@ -283,10 +284,13 @@ class Orchestrator:
         events.emit("phase_change", {"phase": "exploration"})
         print(f"  {'─'*54}\n")
 
-        # Create root that decomposes into plan segments
-        root_directives = []
+        # Create WorkerNode agents for each segment
+        exploration_budget = self.budget.total * self.budget.phase_limits["exploration"]
+        segment_budget_each = exploration_budget / max(1, len(segments))
+
+        segment_workers = []
         for i, seg in enumerate(segments, 1):
-            root_directives.append(Directive(
+            directive = Directive(
                 scope=Scope(
                     source=self.data_source.__class__.__name__,
                     filters=seg.get("filters", {"keyword": seg["name"]}),
@@ -296,26 +300,55 @@ class Orchestrator:
                 parent_context=f"Planner assigned this segment: {seg.get('reasoning', '')}",
                 tree_position=str(i),
                 segment_id=seg["name"],
-            ))
+            )
+            worker = WorkerNode(
+                directive=directive,
+                data_source=self.data_source,
+                budget=seg.get("sub_budget", segment_budget_each),
+                total_budget=self.budget.total,
+                lenses=lenses,
+                semaphore=self._semaphore,
+            )
+            segment_workers.append(worker)
 
-        # Run all segments in parallel
-        segment_tasks = [self._explore_node(d) for d in root_directives]
-        segment_results = list(await asyncio.gather(*segment_tasks))
+        # Run all segment workers in parallel
+        segment_results = list(await asyncio.gather(
+            *[w.run() for w in segment_workers],
+            return_exceptions=True,
+        ))
+        segment_results = [r for r in segment_results if isinstance(r, dict)]
+
+        # Record exploration spending
+        total_explore_cost = sum(w.spent + sum(c.spent for c in w.child_workers) for w in segment_workers)
+        self.budget.record("exploration", total_explore_cost)
+
+        # Collect stats from workers
+        self._collect_worker_stats(segment_workers)
 
         # Root-level synthesis across all segments
         if len(segment_results) > 1 and self.budget.can_spend():
             print(f"\n  [ROOT] SYNTHESIZING all {len(segment_results)} segments...")
-            # Build a virtual root result for synthesis
             virtual_root = NodeResult(
                 node_id="root", parent_id=None,
                 scope_description="Root synthesis across all segments",
                 survey="", observations=[], child_directives=[],
                 unresolved=[], raw_reasoning="",
             )
-            root_synthesis = await synthesize(virtual_root, segment_results, lenses)
+            # Convert worker results to NodeResult for synthesis compatibility
+            synth_inputs = [self._worker_result_to_node_result(r) for r in segment_results]
+            root_synthesis = await synthesize(virtual_root, synth_inputs, lenses)
             self.all_syntheses.append(root_synthesis)
             self.budget.record("synthesis", root_synthesis.cost)
             self._update_tokens(root_synthesis.token_usage)
+
+            # Also collect any findings from worker Turn 2 reviews
+            for r in segment_results:
+                for f in r.get("findings", []):
+                    events.emit("finding_discovered", {
+                        "node_id": r.get("node_id", ""),
+                        "summary": str(f.get("summary", ""))[:80],
+                        "type": f.get("type", "cross_cutting"),
+                    })
 
         self._log_progress()
 
@@ -859,6 +892,81 @@ Respond ONLY with a JSON array."""}],
              "clusters_covered": n_clusters,
              "depth": f"All {n_clusters} clusters + full cross-referencing of {n_records} records"},
         ]
+
+    def _collect_worker_stats(self, workers: list):
+        """Collect stats from WorkerNode tree for reporting."""
+        def _walk(worker):
+            self.stats.nodes_spawned += 1
+            self.stats.observations_collected += len(worker.observations)
+            depth = worker.pos.count(".") + 1 if worker.pos != "ROOT" else 0
+            self.stats.max_depth_reached = max(self.stats.max_depth_reached, depth)
+            if not worker.child_workers:
+                self.stats.nodes_resolved += 1
+            for child in worker.child_workers:
+                _walk(child)
+
+        for w in workers:
+            _walk(w)
+
+        # Save worker nodes to disk
+        self._save_worker_tree(workers)
+
+    def _save_worker_tree(self, workers: list):
+        """Save all worker nodes to disk for the report."""
+        def _save(worker):
+            node_data = {
+                "node_id": worker.node_id,
+                "parent_id": worker.directive.parent_id,
+                "scope_description": worker.directive.scope.description,
+                "survey": "",
+                "observations": worker.observations,
+                "child_directives_count": len(worker.child_workers),
+                "unresolved": [],
+                "raw_reasoning": "",
+                "thinking": "\n\n".join(t.get("thinking", "") for t in worker.thinking_log),
+                "token_usage": {},
+                "cost": worker.spent,
+            }
+            node_file = self.run_dir / "nodes" / f"{worker.node_id[:8]}.json"
+            with open(node_file, "w") as f:
+                json.dump(node_data, f, indent=2, default=str)
+            for child in worker.child_workers:
+                _save(child)
+
+        for w in workers:
+            _save(w)
+
+    def _worker_result_to_node_result(self, result: dict) -> NodeResult:
+        """Convert a WorkerNode result dict to a NodeResult for synthesis."""
+        observations = []
+        for obs in result.get("observations", []):
+            src = obs.get("source", {})
+            observations.append(Observation(
+                node_id=result.get("node_id", ""),
+                what_i_saw=obs.get("what_i_saw", ""),
+                source=Source(
+                    doc_id=src.get("doc_id", ""),
+                    title=src.get("title", ""),
+                    agency=src.get("agency", ""),
+                    date=src.get("date", ""),
+                    url=src.get("url", ""),
+                ),
+                observation_type=obs.get("observation_type", "pattern"),
+                preliminary_relevance=obs.get("preliminary_relevance", {}),
+                reasoning=obs.get("reasoning", ""),
+                potential_connections=obs.get("potential_connections", []),
+            ))
+        return NodeResult(
+            node_id=result.get("node_id", ""),
+            parent_id=result.get("parent_id"),
+            scope_description=result.get("scope_description", ""),
+            survey="",
+            observations=observations,
+            child_directives=[],
+            unresolved=[],
+            raw_reasoning="",
+            thinking="\n".join(t.get("thinking", "") for t in result.get("thinking_log", [])),
+        )
 
     def _capacity_context(self) -> str:
         """How many more exploration nodes can we afford, based on actuals."""
