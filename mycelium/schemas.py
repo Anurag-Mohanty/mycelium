@@ -73,6 +73,7 @@ class NodeResult:
     child_directives: list[Directive]
     unresolved: list[str]
     raw_reasoning: str
+    thinking: str = ""  # extended thinking chain-of-thought
     token_usage: dict = field(default_factory=dict)
     cost: float = 0.0
 

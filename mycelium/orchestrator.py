@@ -447,7 +447,7 @@ class Orchestrator:
         self._update_tokens(node_result.token_usage)
         self._save_node(node_result)
         self._populate_kg(node_result)
-        self._emit_reasoning(directive.node_id, node_result.raw_reasoning)
+        self._emit_reasoning(directive.node_id, node_result.thinking)
 
         n_obs = len(node_result.observations)
         n_children = len(node_result.child_directives)
@@ -875,43 +875,41 @@ Respond ONLY with a JSON array."""}],
             f"Plan your decomposition accordingly."
         )
 
-    def _emit_reasoning(self, node_id: str, raw_reasoning: str):
-        """Parse reasoning steps from the LLM's raw text output.
+    def _emit_reasoning(self, node_id: str, thinking: str):
+        """Emit the extended thinking block as events for the visualizer.
 
-        The node prompt asks the LLM to think through STEP 1-5 before outputting JSON.
-        We look for STEP markers in the text to extract summaries of each thinking step.
+        The thinking is genuine chain-of-thought from the LLM. We split it
+        into displayable chunks and emit each as a node_thinking event.
         """
-        if not raw_reasoning:
+        if not thinking:
             return
 
-        text = raw_reasoning
-        for step_name in ("SURVEY", "ORIENT", "HYPOTHESIZE", "ASSESS"):
-            # Find "STEP N — STEPNAME" or just the step name
-            idx = text.upper().find(step_name)
-            if idx < 0:
-                continue
-            # Extract content after the marker
-            start = idx + len(step_name)
-            while start < len(text) and text[start] in " *\n—-:#_`1234567890.":
-                start += 1
-            # Find the end — next step or JSON block
-            end = len(text)
-            for marker in ("STEP", "ORIENT", "HYPOTHESIZE", "ASSESS", "OUTPUT", "```"):
-                mi = text.upper().find(marker, start + 20)
-                if mi > start and mi < end:
-                    end = mi
-            snippet = text[start:min(start + 300, end)].strip()
-            # Take first 2-3 sentences
-            sentences = snippet.replace('\n', ' ').split('. ')
-            summary = '. '.join(s.strip() for s in sentences[:3] if s.strip())
-            if len(summary) > 220:
-                summary = summary[:220] + '...'
-            if summary:
-                events.emit("node_reasoning", {
-                    "node_id": node_id,
-                    "step": step_name.lower(),
-                    "summary": summary,
-                })
+        # Split into paragraphs
+        paragraphs = [p.strip() for p in thinking.split("\n\n") if p.strip()]
+
+        # Merge short paragraphs, cap ~300 chars per chunk
+        chunks = []
+        current = ""
+        for p in paragraphs:
+            if len(current) + len(p) < 350:
+                current += ("\n" + p if current else p)
+            else:
+                if current:
+                    chunks.append(current)
+                current = p
+        if current:
+            chunks.append(current)
+        if not chunks:
+            chunks = [thinking[:300]]
+
+        for i, chunk in enumerate(chunks):
+            events.emit("node_thinking", {
+                "node_id": node_id,
+                "turn": "initial",
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "text": chunk[:300],
+            })
 
     # --- Helpers ---
 
@@ -1058,6 +1056,7 @@ def _result_to_dict(r: NodeResult) -> dict:
         "child_directives_count": len(r.child_directives),
         "unresolved": r.unresolved,
         "raw_reasoning": r.raw_reasoning,
+        "thinking": r.thinking,
         "token_usage": r.token_usage, "cost": r.cost,
     }
 

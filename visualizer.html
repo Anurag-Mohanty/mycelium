@@ -327,8 +327,23 @@ function handleEvent(evt) {
             if (nodes.has(evt.node_id)) {
                 const n = nodes.get(evt.node_id);
                 n.reasoning[evt.step] = evt.summary;
-                // Show reasoning in the activity log
                 addLogReasoning(n.position, evt.step, evt.summary);
+                if (selectedNodeId === evt.node_id) showDetailOverlay(evt.node_id);
+            }
+            break;
+        }
+
+        case 'node_thinking': {
+            if (nodes.has(evt.node_id)) {
+                const n = nodes.get(evt.node_id);
+                // Append thinking chunks to a thinking array
+                if (!n.thinking_chunks) n.thinking_chunks = [];
+                n.thinking_chunks.push(evt.text);
+                // Show in activity log
+                if (evt.chunk_index === 0) {
+                    // First chunk — show with node position
+                    addLogThinking(n.position, evt.text);
+                }
                 // Update detail overlay if this node is selected
                 if (selectedNodeId === evt.node_id) showDetailOverlay(evt.node_id);
             }
@@ -438,6 +453,16 @@ function addLogBlock(type, label, lines) {
     body.scrollTop = body.scrollHeight;
 }
 
+function addLogThinking(position, text) {
+    const body = document.getElementById('log-body');
+    const el = document.createElement('div');
+    el.className = 'log-entry reasoning';
+    el.innerHTML = `<div style="font-size:9px;letter-spacing:1px;color:#8b7ff8;margin-bottom:3px">[${position}] THINKING</div><div style="color:#b0b0c4;font-size:11px;line-height:1.5;font-style:italic">"${text.slice(0,200)}"</div>`;
+    body.appendChild(el);
+    body.scrollTop = body.scrollHeight;
+    while(body.children.length > 400) body.removeChild(body.firstChild);
+}
+
 function addLogReasoning(position, step, summary) {
     const body = document.getElementById('log-body');
     const el = document.createElement('div');
@@ -538,12 +563,22 @@ function showDetailOverlay(nodeId) {
         <div class="detail-meta"><span class="dot" style="background:${colors[n.status]||'#555'}"></span>${n.status} | $${(n.cost||0).toFixed(3)} | ${n.obs_count} obs${n.segment?` | ${n.segment}`:''}</div>
         <hr style="border-color:#1e1e30;margin:10px 0">`;
 
-    for (const step of ['survey','orient','hypothesize','assess']) {
-        if (n.reasoning[step]) {
-            html += `<div class="reasoning-step ${step}"><div class="step-label">${step}</div>"${n.reasoning[step]}"</div>`;
+    // Show extended thinking (genuine chain-of-thought)
+    if (n.thinking_chunks && n.thinking_chunks.length) {
+        html += `<div style="font-size:9px;text-transform:uppercase;color:#8b7ff8;letter-spacing:1px;margin-bottom:8px">Thinking</div>`;
+        for (const chunk of n.thinking_chunks) {
+            html += `<div style="margin:6px 0;padding:8px 12px;border-left:2px solid #333;font-size:11px;line-height:1.5;color:#b0b0c4;font-style:italic">"${chunk}"</div>`;
         }
     }
-    if (!Object.keys(n.reasoning).length && n.status==='exploring') {
+    // Fallback: old reasoning steps format
+    else if (Object.keys(n.reasoning).length) {
+        for (const step of ['survey','orient','hypothesize','assess']) {
+            if (n.reasoning[step]) {
+                html += `<div class="reasoning-step ${step}"><div class="step-label">${step}</div>"${n.reasoning[step]}"</div>`;
+            }
+        }
+    }
+    else if (n.status==='exploring') {
         html += `<div style="color:#555;font-size:12px;margin:14px 0">Reasoning in progress...</div>`;
     }
     if (n.top_observation) {

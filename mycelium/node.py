@@ -98,22 +98,34 @@ async def run_node(directive: Directive, data_source, budget_remaining: float,
         force_resolve=force_resolve,
     )
 
-    # Send to LLM
+    # Send to LLM with extended thinking
     client = anthropic.Anthropic()
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=5000,
+        max_tokens=16000,
+        thinking={
+            "type": "enabled",
+            "budget_tokens": 5000,
+        },
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw_text = response.content[0].text
+    # Extract thinking and text from response blocks
+    thinking_text = ""
+    raw_text = ""
+    for block in response.content:
+        if block.type == "thinking":
+            thinking_text = block.thinking
+        elif block.type == "text":
+            raw_text = block.text
+
     usage = {
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
     }
     cost = (usage["input_tokens"] * 3 + usage["output_tokens"] * 15) / 1_000_000
 
-    # Parse
+    # Parse the JSON output (from the text block, not thinking)
     try:
         result = _parse_json(raw_text)
     except (json.JSONDecodeError, ValueError) as e:
@@ -122,7 +134,8 @@ async def run_node(directive: Directive, data_source, budget_remaining: float,
             scope_description=directive.scope.description,
             survey="(parse error)", observations=[], child_directives=[],
             unresolved=[f"Parse error: {str(e)[:100]}"],
-            raw_reasoning=raw_text, token_usage=usage, cost=cost,
+            raw_reasoning=raw_text, thinking=thinking_text,
+            token_usage=usage, cost=cost,
         )
 
     # Build observations from LLM output
@@ -183,6 +196,7 @@ async def run_node(directive: Directive, data_source, budget_remaining: float,
         child_directives=child_directives,
         unresolved=result.get("unresolved", []),
         raw_reasoning=raw_text,
+        thinking=thinking_text,
         token_usage=usage,
         cost=cost,
     )
