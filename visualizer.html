@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mycelium — Engineered Curiosity</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    background: #0a0a14; color: #d0d0dc;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    overflow: hidden; height: 100vh;
+    display: flex; flex-direction: column;
+}
+
+/* === HEADER === */
+.header {
+    padding: 14px 24px 10px; border-bottom: 1px solid #1e1e30;
+    flex-shrink: 0;
+}
+.header-top { display: flex; align-items: baseline; gap: 14px; }
+.title { color: #8b7ff8; font-size: 22px; font-weight: bold; letter-spacing: 3px; }
+.subtitle { color: #6a6a80; font-size: 13px; font-style: italic; }
+.source-info { font-size: 12px; color: #9898b0; margin-top: 4px; }
+.budget-row { display: flex; align-items: center; gap: 14px; margin-top: 8px; }
+.budget-bar { flex: 1; max-width: 320px; height: 6px; background: #1a1a2e; border-radius: 3px; overflow: hidden; }
+.budget-fill { height: 100%; background: #8b7ff8; transition: width 0.5s ease; width: 0%; }
+.budget-text { font-size: 13px; color: #b0b0c0; }
+.stats-row { display: flex; gap: 24px; margin-top: 6px; font-size: 12px; color: #9090a4; }
+.stats-row span { color: #d0d0e0; font-weight: bold; }
+.phase-bar { display: flex; gap: 3px; margin-top: 8px; }
+.phase-step { padding: 3px 10px; font-size: 9px; letter-spacing: 1px; text-transform: uppercase; border-radius: 2px; background: #14141e; color: #4a4a60; }
+.phase-step.active { background: #8b7ff8; color: #fff; }
+.phase-step.done { background: #1a2e1a; color: #5cb85c; }
+
+/* === MAIN LAYOUT: tree left, log right === */
+.main { display: flex; flex: 1; overflow: hidden; }
+.tree-container { flex: 1; position: relative; }
+.tree-container svg { width: 100%; height: 100%; }
+
+/* Right panel — ALWAYS shows activity log */
+.right-panel {
+    width: 380px; border-left: 1px solid #1e1e30;
+    display: flex; flex-direction: column;
+    flex-shrink: 0; overflow: hidden;
+}
+.panel-label {
+    padding: 8px 16px; border-bottom: 1px solid #1e1e30;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6a6a80;
+}
+.log-body { flex: 1; overflow-y: auto; padding: 8px 16px; }
+
+/* Log entries */
+.log-entry { padding: 4px 0; font-size: 11px; line-height: 1.6; color: #9898b0; border-bottom: 1px solid #0e0e18; }
+.log-entry.genesis { color: #b0a0e0; }
+.log-entry.planner { color: #80c0a0; }
+.log-entry.reasoning { color: #a0b8d0; }
+.log-entry.resolved { color: #60c080; }
+.log-entry.decomposing { color: #9088c0; }
+.log-entry.finding { color: #d4a030; }
+.log-entry.validation { color: #c0a060; }
+.log-entry.significance { color: #e0b840; }
+.log-entry.impact { color: #ff8844; }
+.log-entry.phase { color: #8b7ff8; font-weight: bold; font-size: 12px; padding: 8px 0 4px; border-bottom: 1px solid #1e1e30; }
+.log-step { font-size: 9px; text-transform: uppercase; color: #6a6a80; letter-spacing: 1px; }
+.log-content { margin-top: 2px; color: #c0c0d4; }
+
+/* Finding cards in log */
+.log-finding { margin: 6px 0; padding: 8px 12px; border-radius: 4px; background: #12121e; font-size: 11px; line-height: 1.5; }
+.log-finding.headline { border-left: 3px solid #e0b840; }
+.log-finding.significant { border-left: 3px solid #8b7ff8; }
+.log-finding.noted { border-left: 3px solid #333; }
+
+/* === NODE DETAIL OVERLAY === */
+.detail-overlay {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: 440px; background: #0e0e1a; border-left: 2px solid #8b7ff8;
+    z-index: 40; transform: translateX(100%);
+    transition: transform 0.25s ease;
+    overflow-y: auto; padding: 20px 24px;
+}
+.detail-overlay.active { transform: translateX(0); }
+.detail-overlay-backdrop {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.3); z-index: 35;
+    display: none;
+}
+.detail-overlay-backdrop.active { display: block; }
+
+.detail-close { float: right; background: none; border: none; color: #6a6a80; font-size: 20px; cursor: pointer; font-family: inherit; }
+.detail-close:hover { color: #fff; }
+.detail-title { color: #8b7ff8; font-size: 16px; font-weight: bold; }
+.detail-scope { color: #b0b0c4; font-size: 12px; margin: 6px 0 12px; line-height: 1.5; }
+.detail-meta { font-size: 11px; color: #8888a0; margin-bottom: 14px; }
+.detail-meta .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.reasoning-step { margin: 8px 0; padding: 8px 14px; border-left: 3px solid #333; font-size: 12px; line-height: 1.5; color: #c0c0d4; }
+.reasoning-step.survey { border-color: #4a7ab0; }
+.reasoning-step.orient { border-color: #3da06e; }
+.reasoning-step.hypothesize { border-color: #d0901d; }
+.reasoning-step.assess { border-color: #7b5fc0; }
+.step-label { font-size: 9px; text-transform: uppercase; color: #7a7a90; letter-spacing: 1px; margin-bottom: 3px; }
+.detail-finding { margin-top: 14px; padding: 10px 12px; background: #14141e; border-radius: 4px; font-size: 11px; line-height: 1.5; color: #b0b0c4; }
+.detail-finding-label { font-size: 9px; color: #6a6a80; text-transform: uppercase; margin-bottom: 4px; }
+
+/* === TREE NODES === */
+.link { fill: none; stroke: #1e1e30; stroke-width: 1.5px; }
+.node { cursor: pointer; }
+.node circle { stroke-width: 2px; transition: fill 0.3s, r 0.3s; }
+.node.exploring circle { fill: #4a7ab0; stroke: #6a9ad0; animation: pulse 1.5s infinite; }
+.node.resolved circle { fill: #3da06e; stroke: #5dc08e; }
+.node.synthesizing circle { fill: #7b5fc0; stroke: #9b7fe0; animation: pulse 1s infinite; }
+.node.decomposing circle { fill: #5a9a5a; stroke: #7aba7a; }
+.node.idle circle { fill: #2a2a3e; stroke: #3a3a4e; }
+.node.selected circle { stroke: #fff !important; stroke-width: 3px; }
+.node .label { font-size: 8px; fill: #9898b0; pointer-events: none; text-anchor: middle; }
+.node .obs-badge { font-size: 7px; fill: #fff; pointer-events: none; text-anchor: middle; dominant-baseline: central; }
+
+/* Tooltip */
+.tooltip { position: fixed; z-index: 30; pointer-events: none; background: #1a1a2e; border: 1px solid #333; border-radius: 4px; padding: 8px 12px; font-size: 11px; max-width: 320px; display: none; line-height: 1.4; color: #c0c0d0; }
+
+/* Summary overlay */
+.summary-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(10,10,20,0.92); z-index: 50; display: none; align-items: center; justify-content: center; }
+.summary-overlay.active { display: flex; }
+.summary-box { background: #12121e; border: 1px solid #333; border-radius: 8px; padding: 32px 40px; max-width: 620px; width: 92%; line-height: 1.6; }
+.summary-box h2 { color: #8b7ff8; font-size: 13px; letter-spacing: 2px; margin-bottom: 14px; text-transform: uppercase; }
+.summary-stats { font-size: 13px; color: #b0b0c4; margin-bottom: 16px; }
+.summary-finding { margin: 10px 0; padding: 12px 16px; border-radius: 4px; background: #0a0a14; font-size: 12px; line-height: 1.5; }
+.summary-finding.headline { border-left: 3px solid #e0b840; }
+.summary-finding.significant { border-left: 3px solid #8b7ff8; }
+.summary-finding h3 { font-size: 10px; color: #e0b840; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+.summary-finding p { color: #c0c0d4; }
+
+/* Playback bar */
+.playback-bar { display: none; padding: 8px 20px; background: #0e0e18; border-top: 1px solid #1e1e30; align-items: center; gap: 12px; font-size: 11px; flex-shrink: 0; color: #9898b0; }
+.playback-bar.active { display: flex; }
+.playback-bar button { background: #1a1a2e; color: #b0b0c0; border: 1px solid #333; padding: 4px 14px; border-radius: 3px; cursor: pointer; font-family: inherit; font-size: 11px; }
+.playback-bar button:hover { color: #fff; border-color: #8b7ff8; }
+.playback-bar input[type=range] { flex: 1; accent-color: #8b7ff8; }
+.playback-bar select { background: #1a1a2e; color: #b0b0c0; border: 1px solid #333; padding: 3px 8px; border-radius: 3px; font-family: inherit; }
+
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
+</style>
+</head>
+<body>
+
+<div class="header">
+    <div class="header-top">
+        <div class="title">MYCELIUM</div>
+        <div class="subtitle">Engineered Curiosity</div>
+    </div>
+    <div class="source-info" id="source-info">Connecting...</div>
+    <div class="budget-row">
+        <div class="budget-bar"><div class="budget-fill" id="budget-fill"></div></div>
+        <div class="budget-text" id="budget-text">$0.00 / $10.00 (0%)</div>
+    </div>
+    <div class="stats-row">
+        <div>Nodes: <span id="stat-nodes">0</span></div>
+        <div>Observations: <span id="stat-obs">0</span></div>
+        <div>Depth: <span id="stat-depth">0</span></div>
+        <div>Findings: <span id="stat-findings">0</span></div>
+    </div>
+    <div class="phase-bar" id="phase-bar">
+        <div class="phase-step" data-phase="catalog">Catalog</div>
+        <div class="phase-step" data-phase="genesis">Genesis</div>
+        <div class="phase-step" data-phase="exploration">Explore</div>
+        <div class="phase-step" data-phase="deep_dive">Deep-dive</div>
+        <div class="phase-step" data-phase="validation">Validate</div>
+        <div class="phase-step" data-phase="significance">Score</div>
+        <div class="phase-step" data-phase="impact">Impact</div>
+    </div>
+</div>
+
+<div class="main">
+    <div class="tree-container" id="tree-container"><svg id="tree-svg"></svg></div>
+    <div class="right-panel">
+        <div class="panel-label">Activity</div>
+        <div class="log-body" id="log-body"></div>
+    </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+<div class="detail-overlay-backdrop" id="detail-backdrop"></div>
+<div class="detail-overlay" id="detail-overlay"></div>
+<div class="summary-overlay" id="summary-overlay"><div class="summary-box" id="summary-box"></div></div>
+
+<div class="playback-bar" id="playback-bar">
+    <button id="play-btn" onclick="togglePause()">Pause</button>
+    <input type="range" id="scrub" min="0" max="100" value="0" oninput="scrubTo(this.value)">
+    <select onchange="setSpeed(this.value)"><option value="1">1x</option><option value="5">5x</option><option value="10" selected>10x</option><option value="20">20x</option></select>
+    <span id="playback-time">0:00 / 0:00</span>
+</div>
+
+<script>
+// === STATE ===
+const nodes = new Map();
+let totalNodes=0, totalObs=0, maxDepth=0, totalFindings=0;
+let selectedNodeId = null;
+let headlineFindings=[], significantFindings=[];
+
+// === D3 ===
+const svg = d3.select('#tree-svg');
+const g = svg.append('g');
+const zoom = d3.zoom().scaleExtent([0.1,4]).on('zoom',e=>g.attr('transform',e.transform));
+svg.call(zoom);
+const linkGroup = g.append('g');
+const nodeGroup = g.append('g');
+
+function initZoom() {
+    const w = document.getElementById('tree-container').clientWidth;
+    svg.call(zoom.transform, d3.zoomIdentity.translate(w/2, 50).scale(0.7));
+}
+
+// === WEBSOCKET ===
+let ws=null, isPlayback=false;
+function connectWS() {
+    ws = new WebSocket('ws://localhost:8765');
+    ws.onopen = () => { document.getElementById('source-info').textContent = 'Connected — waiting for genesis...'; };
+    ws.onclose = () => { finalizeAll(); };
+    ws.onmessage = e => handleEvent(JSON.parse(e.data));
+}
+
+function finalizeAll() {
+    nodes.forEach(n => { if(n.status==='exploring'||n.status==='synthesizing') n.status='resolved'; });
+    updateTree();
+    document.getElementById('source-info').textContent = 'Exploration complete';
+    showSummary();
+}
+
+// === EVENT HANDLER ===
+function handleEvent(evt) {
+    switch(evt.type) {
+        case 'phase_change': {
+            const phase = evt.phase || evt.to_phase || '';
+            document.getElementById('source-info').textContent = `Phase: ${phase.replace(/_/g,' ').toUpperCase()}`;
+            updatePhaseBar(phase);
+            addLog('phase', `--- ${phase.replace(/_/g,' ').toUpperCase()} ---`);
+            break;
+        }
+
+        case 'connect': {
+            showSourceSelection(evt);
+            break;
+        }
+
+        case 'source_response': {
+            showSourceResponse(evt);
+            break;
+        }
+
+        case 'source_info': {
+            document.getElementById('source-info').textContent = `Source: ${evt.source_name || ''}`;
+            break;
+        }
+
+        case 'catalog_progress': {
+            const pct = evt.percent || 0;
+            document.getElementById('source-info').textContent =
+                `Cataloging: ${evt.scanned || 0} / ${evt.total || '?'} records scanned (${pct}%)`;
+            break;
+        }
+
+        case 'present_tiers': {
+            showTierSelection(evt);
+            break;
+        }
+
+        case 'budget_authorized': {
+            hideTierSelection();
+            document.getElementById('source-info').textContent = `Budget: $${(evt.budget||0).toFixed(2)} authorized`;
+            break;
+        }
+
+        case 'catalog_complete': {
+            const clusters = evt.clusters || [];
+            const lines = [`Cataloged ${evt.total_records} records — ${evt.anomaly_clusters} anomaly clusters found:`];
+            for (const c of clusters.slice(0, 5)) {
+                lines.push(`  [${c.severity.toUpperCase()}] ${c.name}`);
+            }
+            addLogBlock('genesis', 'CATALOG', lines);
+            document.getElementById('source-info').textContent =
+                `Cataloged ${evt.total_records} records | ${evt.anomaly_clusters} anomaly clusters`;
+            break;
+        }
+
+        case 'genesis_reasoning': {
+            const summary = evt.corpus_summary || '';
+            const lenses = evt.lenses || [];
+            const cut = evt.recommended_cut || '';
+            addLogBlock('genesis', 'GENESIS', [
+                summary.slice(0, 200),
+                '',
+                '• Lenses: ' + lenses.slice(0, 6).join(', '),
+                cut ? '• Decomposition: ' + cut.slice(0, 120) : '',
+            ].filter(Boolean));
+            document.getElementById('source-info').textContent = summary.slice(0, 120);
+            break;
+        }
+
+        case 'planner_reasoning': {
+            const segs = evt.segments || [];
+            const lines = [`Splitting into ${segs.length} segments, ~${evt.estimated_nodes} nodes:`];
+            for (const s of segs.slice(0, 8)) {
+                lines.push(`• ${s.name}  $${(s.budget||0).toFixed(2)}  ~${s.nodes} nodes`);
+                if (s.reasoning) lines.push(`  ${s.reasoning.slice(0, 70)}`);
+            }
+            if (evt.deep_dive_strategy) lines.push(`• Deep-dive: ${evt.deep_dive_strategy.slice(0, 80)}`);
+            addLogBlock('planner', 'PLANNER', lines);
+            break;
+        }
+
+        case 'node_spawned': {
+            nodes.set(evt.node_id, {
+                id:evt.node_id, parent_id:evt.parent_id, position:evt.tree_position,
+                status:'exploring', obs_count:0, scope:evt.scope_summary||'',
+                segment:evt.segment_id||'', reasoning:{}, cost:0, top_observation:'',
+                children_scopes:[],
+            });
+            totalNodes++;
+            document.getElementById('stat-nodes').textContent = totalNodes;
+            // Don't log spawns — they're noise. The reasoning events tell the story.
+            updateTree();
+            break;
+        }
+
+        case 'node_reasoning': {
+            if (nodes.has(evt.node_id)) {
+                const n = nodes.get(evt.node_id);
+                n.reasoning[evt.step] = evt.summary;
+                // Show reasoning in the activity log
+                addLogReasoning(n.position, evt.step, evt.summary);
+                // Update detail overlay if this node is selected
+                if (selectedNodeId === evt.node_id) showDetailOverlay(evt.node_id);
+            }
+            break;
+        }
+
+        case 'node_resolved': {
+            if (nodes.has(evt.node_id)) {
+                const n = nodes.get(evt.node_id);
+                n.status='resolved'; n.obs_count=evt.observations_count||0;
+                n.cost=evt.cost||0; n.top_observation=evt.top_observation||'';
+                totalObs += n.obs_count;
+                document.getElementById('stat-obs').textContent = totalObs;
+                if (n.obs_count > 0) {
+                    addLog('resolved', `[${n.position}] Resolved: ${n.obs_count} observations. ${(n.top_observation||'').slice(0,80)}`);
+                }
+            }
+            updateTree(); break;
+        }
+
+        case 'node_decomposing': {
+            if (nodes.has(evt.node_id)) {
+                const n = nodes.get(evt.node_id);
+                n.status='decomposing'; n.obs_count=evt.observations_count||0;
+                n.children_scopes=evt.children_scopes||[];
+                totalObs += n.obs_count;
+                document.getElementById('stat-obs').textContent = totalObs;
+                addLog('decomposing', `[${n.position}] ${n.obs_count} obs. Delegating to ${evt.children_count} sub-investigations.`);
+            }
+            updateTree(); break;
+        }
+
+        case 'node_status':
+            if (nodes.has(evt.node_id)) { nodes.get(evt.node_id).status = evt.status; updateTree(); }
+            break;
+
+        case 'budget_update': {
+            const pct = evt.percent_used||0;
+            document.getElementById('budget-fill').style.width = pct+'%';
+            document.getElementById('budget-fill').style.background = pct>80?'#ef6f6f':pct>50?'#efcf6f':'#8b7ff8';
+            document.getElementById('budget-text').textContent = `$${(evt.total_spent||0).toFixed(2)} / $${((evt.total_spent||0)+(evt.total_remaining||0)).toFixed(2)} (${pct.toFixed(0)}%)`;
+            break;
+        }
+
+        case 'finding_discovered':
+            totalFindings++;
+            document.getElementById('stat-findings').textContent = totalFindings;
+            addLog('finding', `[DISCOVERY] ${(evt.summary||'').slice(0,100)}`);
+            break;
+
+        case 'validation_result':
+            addLog('validation', `[${(evt.verdict||'').toUpperCase()}] ${(evt.finding_summary||'').slice(0,80)}`);
+            break;
+
+        case 'significance_scored': {
+            const tier = evt.tier||'noted';
+            if (tier==='headline') headlineFindings.push(evt);
+            else if (tier==='significant') significantFindings.push(evt);
+            const body = document.getElementById('log-body');
+            const el = document.createElement('div');
+            el.className = `log-finding ${tier}`;
+            el.innerHTML = `<div style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:${tier==='headline'?'#e0b840':tier==='significant'?'#8b7ff8':'#555'}">${tier} (${evt.composite||0})</div><div style="margin-top:3px;color:#c0c0d4">${(evt.finding_summary||'').slice(0,140)}</div>`;
+            body.appendChild(el);
+            body.scrollTop = body.scrollHeight;
+            break;
+        }
+
+        case 'impact_result':
+            addLog('impact', `[IMPACT: ${evt.urgency}] ${(evt.finding_summary||'').slice(0,80)}`);
+            break;
+
+        case 'exploration_complete':
+            document.getElementById('source-info').textContent = `Complete: ${evt.total_nodes} nodes, ${evt.total_observations} obs, $${(evt.total_cost||0).toFixed(2)}, ${formatTime((evt.elapsed_seconds||0)*1000)}`;
+            finalizeAll();
+            break;
+    }
+
+    // Update depth
+    nodes.forEach(n => { const d=(n.position||'').split('.').length; if(d>maxDepth)maxDepth=d; });
+    document.getElementById('stat-depth').textContent = maxDepth;
+}
+
+// === LOGGING ===
+function addLog(type, text) {
+    const body = document.getElementById('log-body');
+    const el = document.createElement('div');
+    el.className = `log-entry ${type}`;
+    el.textContent = text;
+    body.appendChild(el);
+    body.scrollTop = body.scrollHeight;
+    while(body.children.length > 400) body.removeChild(body.firstChild);
+}
+
+function addLogBlock(type, label, lines) {
+    const body = document.getElementById('log-body');
+    const el = document.createElement('div');
+    el.className = `log-entry ${type}`;
+    el.style.padding = '8px 0';
+    const color = type==='genesis'?'#b0a0e0':type==='planner'?'#80c0a0':'#9898b0';
+    el.innerHTML = `<div style="font-size:10px;letter-spacing:1px;color:${color};font-weight:bold;margin-bottom:6px">${label}</div><div style="color:#c0c0d4;line-height:1.6;font-size:11px">${lines.map(l=>{
+        // Indent lines that start with spaces (sub-items)
+        if (l.trim().startsWith('-') || l.trim().startsWith('•')) return '<div style="margin:2px 0;padding-left:8px;color:#9898b0">'+l+'</div>';
+        if (l.trim().match(/^\s/)) return '<div style="margin:2px 0;padding-left:12px;color:#8888a0;font-size:10px">'+l.trim()+'</div>';
+        return '<div style="margin:4px 0">'+l+'</div>';
+    }).join('')}</div>`;
+    body.appendChild(el);
+    body.scrollTop = body.scrollHeight;
+}
+
+function addLogReasoning(position, step, summary) {
+    const body = document.getElementById('log-body');
+    const el = document.createElement('div');
+    el.className = 'log-entry reasoning';
+    const stepColors = {survey:'#4a7ab0',orient:'#3da06e',hypothesize:'#d0901d',assess:'#7b5fc0'};
+    const stepIcons = {survey:'🔍',orient:'🧭',hypothesize:'💡',assess:'⚖️'};
+    el.innerHTML = `<div style="display:flex;gap:6px;align-items:baseline"><span style="color:${stepColors[step]||'#6a6a80'};font-size:9px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0">[${position}] ${step}</span></div><div style="margin:3px 0 0 4px;color:#b0b0c4;font-size:11px;line-height:1.5">${summary.slice(0,200)}</div>`;
+    body.appendChild(el);
+    body.scrollTop = body.scrollHeight;
+    while(body.children.length > 400) body.removeChild(body.firstChild);
+}
+
+// === PHASE BAR ===
+function updatePhaseBar(phase) {
+    let found=false;
+    document.querySelectorAll('.phase-step').forEach(s => {
+        if(s.dataset.phase===phase){s.className='phase-step active';found=true;}
+        else if(!found){s.className='phase-step done';}
+        else{s.className='phase-step';}
+    });
+}
+
+// === TREE ===
+function shortLabel(scope, depth) {
+    if(!scope) return '';
+    // Only show labels for depth 0-1. Deeper nodes show on hover only.
+    if (depth > 1) return '';
+    // Extract first 2-3 meaningful words as the label
+    const words = scope.replace(/[^a-zA-Z0-9@/ -]/g,' ').trim().split(/\s+/).filter(w => w.length > 1);
+    // Skip filler words
+    const skip = new Set(['the','and','of','in','for','to','a','an','with','from','by','that','this','its','are','is']);
+    const meaningful = words.filter(w => !skip.has(w.toLowerCase()));
+    const label = meaningful.slice(0, 3).join(' ');
+    return label.length > 18 ? label.slice(0, 16) + '..' : label;
+}
+function nodeRadius(d) { return d.id==='__root__'?3:5+Math.min(8,(d.obs_count||0)*0.7); }
+function countLeaves(n) { return (!n.children||!n.children.length)?1:n.children.reduce((s,c)=>s+countLeaves(c),0); }
+function buildHierarchy(id) {
+    const n=nodes.get(id); if(!n)return null;
+    const ch=Array.from(nodes.values()).filter(c=>c.parent_id===id).map(c=>buildHierarchy(c.id)).filter(Boolean);
+    return {id:n.id,position:n.position,status:n.status,obs_count:n.obs_count,scope:n.scope,segment:n.segment,children:ch.length?ch:undefined};
+}
+function updateTree() {
+    const arr=Array.from(nodes.values()); if(!arr.length)return;
+    const roots=arr.filter(n=>!n.parent_id||!nodes.has(n.parent_id)); if(!roots.length)return;
+    let root=roots.length===1?buildHierarchy(roots[0].id):{id:'__root__',status:'idle',obs_count:0,scope:'Root',position:'',children:roots.map(r=>buildHierarchy(r.id))};
+    const leaves=countLeaves(root);
+    const tl=d3.tree().nodeSize([Math.max(20,Math.min(42,380/Math.max(1,leaves))),85]);
+    const hier=d3.hierarchy(root); tl(hier);
+
+    const links=linkGroup.selectAll('.link').data(hier.links(),d=>`${d.source.data.id}-${d.target.data.id}`);
+    links.enter().append('path').attr('class','link').attr('opacity',0).merge(links).transition().duration(300).attr('opacity',1).attr('d',d3.linkVertical().x(d=>d.x).y(d=>d.y));
+    links.exit().transition().duration(200).attr('opacity',0).remove();
+
+    const ns=nodeGroup.selectAll('.node').data(hier.descendants(),d=>d.data.id);
+    const enter=ns.enter().append('g').attr('transform',d=>`translate(${d.x},${d.y})`).attr('opacity',0)
+        .on('click',(e,d)=>{e.stopPropagation();toggleDetail(d.data.id);})
+        .on('mouseover',(e,d)=>showTooltip(e,d.data)).on('mousemove',moveTooltip).on('mouseout',hideTooltip);
+    enter.append('circle').attr('r',d=>nodeRadius(d.data));
+    enter.append('text').attr('class','label')
+        .attr('dy', d => {
+            if (d.depth > 1) return nodeRadius(d.data) + 11;
+            // Stagger depth 0-1 labels: even nodes above, odd nodes below
+            const idx = d.parent ? d.parent.children.indexOf(d) : 0;
+            return idx % 2 === 0 ? nodeRadius(d.data) + 13 : -(nodeRadius(d.data) + 5);
+        })
+        .text(d => shortLabel(d.data.scope, d.depth));
+    enter.append('text').attr('class','obs-badge').text(d=>d.data.obs_count>0?d.data.obs_count:'');
+
+    const merged=ns.merge(enter);
+    merged.transition().duration(300).attr('opacity',1).attr('transform',d=>`translate(${d.x},${d.y})`);
+    merged.attr('class',d=>`node ${d.data.status}${d.data.id===selectedNodeId?' selected':''}`);
+    merged.select('circle').transition().duration(250).attr('r',d=>nodeRadius(d.data));
+    merged.select('.label').text(d=>shortLabel(d.data.scope, d.depth));
+    merged.select('.obs-badge').text(d=>d.data.obs_count>0?d.data.obs_count:'');
+    ns.exit().transition().duration(200).attr('opacity',0).remove();
+}
+
+// Click empty space to close detail
+svg.on('click', () => closeDetailOverlay());
+
+// === DETAIL OVERLAY (separate from log) ===
+function toggleDetail(nodeId) {
+    if (selectedNodeId === nodeId) { closeDetailOverlay(); return; }
+    selectedNodeId = nodeId;
+    showDetailOverlay(nodeId);
+    updateTree();
+}
+
+function showDetailOverlay(nodeId) {
+    const n = nodes.get(nodeId); if(!n) return;
+    selectedNodeId = nodeId;
+    const colors={exploring:'#4a7ab0',resolved:'#3da06e',decomposing:'#5a9a5a',synthesizing:'#7b5fc0',idle:'#555'};
+
+    let html = `<button class="detail-close" onclick="closeDetailOverlay()">&times;</button>
+        <div class="detail-title">[${n.position||'ROOT'}]</div>
+        <div class="detail-scope">${n.scope||'Root'}</div>
+        <div class="detail-meta"><span class="dot" style="background:${colors[n.status]||'#555'}"></span>${n.status} | $${(n.cost||0).toFixed(3)} | ${n.obs_count} obs${n.segment?` | ${n.segment}`:''}</div>
+        <hr style="border-color:#1e1e30;margin:10px 0">`;
+
+    for (const step of ['survey','orient','hypothesize','assess']) {
+        if (n.reasoning[step]) {
+            html += `<div class="reasoning-step ${step}"><div class="step-label">${step}</div>"${n.reasoning[step]}"</div>`;
+        }
+    }
+    if (!Object.keys(n.reasoning).length && n.status==='exploring') {
+        html += `<div style="color:#555;font-size:12px;margin:14px 0">Reasoning in progress...</div>`;
+    }
+    if (n.top_observation) {
+        html += `<div class="detail-finding"><div class="detail-finding-label">Top Finding</div>${n.top_observation}</div>`;
+    }
+    if (n.children_scopes && n.children_scopes.length) {
+        html += `<div style="margin-top:14px"><div style="font-size:9px;text-transform:uppercase;color:#6a6a80;letter-spacing:1px;margin-bottom:6px">Delegated to:</div>`;
+        for (const s of n.children_scopes) html += `<div style="padding:3px 0;font-size:11px;color:#9090a4">- ${s}</div>`;
+        html += `</div>`;
+    }
+
+    document.getElementById('detail-overlay').innerHTML = html;
+    document.getElementById('detail-overlay').classList.add('active');
+    document.getElementById('detail-backdrop').classList.add('active');
+    updateTree();
+}
+
+function closeDetailOverlay() {
+    selectedNodeId = null;
+    document.getElementById('detail-overlay').classList.remove('active');
+    document.getElementById('detail-backdrop').classList.remove('active');
+    updateTree();
+}
+
+document.getElementById('detail-backdrop').onclick = closeDetailOverlay;
+
+// === TOOLTIP ===
+function showTooltip(e,d){const t=document.getElementById('tooltip');t.style.display='block';t.innerHTML=`<div style="color:#8b7ff8;font-weight:bold">[${d.position||'ROOT'}]</div><div style="margin-top:4px">${d.scope||'Root'}</div><div style="margin-top:4px;color:#7a7a90">${d.status} | ${d.obs_count} obs</div>`;moveTooltip(e);}
+function moveTooltip(e){const t=document.getElementById('tooltip');t.style.left=(e.clientX+14)+'px';t.style.top=(e.clientY-10)+'px';}
+function hideTooltip(){document.getElementById('tooltip').style.display='none';}
+
+// === SUMMARY ===
+function showSummary() {
+    if(!headlineFindings.length&&!significantFindings.length) return;
+    const box=document.getElementById('summary-box');
+    let html=`<h2>Exploration Complete</h2><div class="summary-stats">${totalNodes} nodes | ${totalObs} observations | ${totalFindings} findings scored</div>`;
+    for(const f of headlineFindings) html+=`<div class="summary-finding headline"><h3>Headline Finding</h3><p>${(f.finding_summary||'').slice(0,250)}</p></div>`;
+    for(const f of significantFindings) html+=`<div class="summary-finding significant"><h3>Significant (${f.composite})</h3><p>${(f.finding_summary||'').slice(0,250)}</p></div>`;
+    html+=`<div style="margin-top:18px;font-size:11px;color:#6a6a80">Click anywhere to dismiss</div>`;
+    box.innerHTML=html;
+    const ov=document.getElementById('summary-overlay');ov.classList.add('active');ov.onclick=()=>ov.classList.remove('active');
+}
+
+// === PLAYBACK ===
+let playbackSpeed=10,playbackPaused=false,playbackEvents=[],playbackIndex=0,playbackResolve=null;
+function togglePause(){playbackPaused=!playbackPaused;document.getElementById('play-btn').textContent=playbackPaused?'Play':'Pause';if(!playbackPaused&&playbackResolve){playbackResolve();playbackResolve=null;}}
+function setSpeed(v){playbackSpeed=parseInt(v);}
+function scrubTo(pct){if(!playbackEvents.length)return;resetState();const t=Math.floor(pct/100*playbackEvents.length);for(let i=0;i<=t&&i<playbackEvents.length;i++)handleEvent(playbackEvents[i]);playbackIndex=t;}
+function resetState(){nodes.clear();totalNodes=0;totalObs=0;maxDepth=0;totalFindings=0;selectedNodeId=null;headlineFindings=[];significantFindings=[];document.getElementById('stat-nodes').textContent='0';document.getElementById('stat-obs').textContent='0';document.getElementById('stat-depth').textContent='0';document.getElementById('stat-findings').textContent='0';document.getElementById('log-body').innerHTML='';linkGroup.selectAll('*').remove();nodeGroup.selectAll('*').remove();}
+async function startPlayback(data){isPlayback=true;playbackEvents=data;document.getElementById('playback-bar').classList.add('active');if(!data.length)return;const dur=data[data.length-1].elapsed_ms||1;for(let i=playbackIndex;i<data.length;i++){if(playbackPaused)await new Promise(r=>{playbackResolve=r;});playbackIndex=i;handleEvent(data[i]);document.getElementById('scrub').value=(i/data.length*100).toFixed(0);document.getElementById('playback-time').textContent=`${formatTime(data[i].elapsed_ms||0)} / ${formatTime(dur)}`;const next=data[i+1];if(next)await sleep(Math.min(((next.elapsed_ms||0)-(data[i].elapsed_ms||0))/playbackSpeed,2000));}finalizeAll();}
+function formatTime(ms){const s=Math.floor(ms/1000),m=Math.floor(s/60);return`${m}:${String(s%60).padStart(2,'0')}`;}
+function sleep(ms){return new Promise(r=>setTimeout(r,Math.max(0,ms)));}
+
+// === SOURCE SELECTION ===
+function showSourceSelection(evt) {
+    const overlay = document.getElementById('summary-overlay');
+    const box = document.getElementById('summary-box');
+
+    let html = `<div style="text-align:center;margin-bottom:28px">
+        <div style="color:#8b7ff8;font-size:28px;font-weight:bold;letter-spacing:4px">MYCELIUM</div>
+        <div style="color:#7a7a90;font-size:14px;font-style:italic;margin-top:6px">Engineered Curiosity</div>
+    </div>
+    <div style="font-size:14px;color:#c0c0d4;margin-bottom:16px">What do you want to explore?</div>
+    <div style="font-size:11px;color:#7a7a90;margin-bottom:16px">
+        Describe any information space. Mycelium will figure out how to access it,
+        catalog everything it can reach, and show you what it found — before spending anything on AI analysis.
+    </div>
+    <textarea id="source-input" rows="3" placeholder="Examples:&#10;npm registry&#10;US federal regulations&#10;SEC 10-K filings for tech companies&#10;GitHub issues for kubernetes/kubernetes"
+        style="width:100%;background:#0a0a14;border:1px solid #333;border-radius:4px;padding:12px;
+        color:#d0d0dc;font-family:inherit;font-size:13px;resize:vertical;line-height:1.5"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitSource()}"></textarea>
+    <button onclick="submitSource()"
+        style="margin-top:12px;background:#8b7ff8;color:#fff;border:none;padding:10px 28px;
+        border-radius:4px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:bold;
+        letter-spacing:1px;width:100%">Explore</button>
+    <div id="source-response" style="margin-top:16px;display:none"></div>`;
+
+    box.innerHTML = html;
+    overlay.classList.add('active');
+    overlay.onclick = null;
+    document.getElementById('source-info').textContent = 'Describe what you want to explore';
+    // Focus the textarea
+    setTimeout(() => document.getElementById('source-input')?.focus(), 100);
+}
+
+function submitSource() {
+    const input = document.getElementById('source-input');
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+
+    // Send to backend — it will figure out if we have a connector
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'select_source', query: text }));
+    }
+
+    // Show thinking state
+    const btn = input.nextElementSibling;
+    if (btn) { btn.textContent = 'Connecting...'; btn.disabled = true; }
+    document.getElementById('source-info').textContent = `Figuring out how to access: ${text.slice(0, 60)}...`;
+}
+
+function showSourceResponse(evt) {
+    // Backend figured out the source — show what it found or ask questions
+    if (evt.status === 'connected') {
+        document.getElementById('summary-overlay').classList.remove('active');
+        document.getElementById('source-info').textContent = `Connected: ${evt.source_name || ''} — starting catalog...`;
+        addLog('phase', `Connected to ${evt.source_name || 'data source'}`);
+    } else if (evt.status === 'clarify') {
+        // Backend needs more info
+        const resp = document.getElementById('source-response');
+        if (resp) {
+            resp.style.display = 'block';
+            resp.innerHTML = `<div style="padding:12px;background:#14141e;border-radius:4px;border-left:3px solid #8b7ff8">
+                <div style="font-size:12px;color:#b0b0c4;line-height:1.5">${evt.message}</div>
+            </div>`;
+        }
+        // Re-enable button
+        const btn = document.querySelector('#summary-box button');
+        if (btn) { btn.textContent = 'Explore'; btn.disabled = false; }
+    } else if (evt.status === 'not_exploration') {
+        const resp = document.getElementById('source-response');
+        if (resp) {
+            resp.style.display = 'block';
+            resp.innerHTML = `<div style="padding:12px;background:#14141e;border-radius:4px;border-left:3px solid #efcf6f">
+                <div style="font-size:12px;color:#d0c090;line-height:1.5">${evt.message}</div>
+            </div>`;
+        }
+        const btn = document.querySelector('#summary-box button');
+        if (btn) { btn.textContent = 'Explore'; btn.disabled = false; }
+    } else if (evt.status === 'unavailable') {
+        const resp = document.getElementById('source-response');
+        if (resp) {
+            resp.style.display = 'block';
+            resp.innerHTML = `<div style="padding:12px;background:#14141e;border-radius:4px;border-left:3px solid #8b7ff8">
+                <div style="font-size:12px;color:#b0b0c4;line-height:1.5;white-space:pre-line">${evt.message}</div>
+            </div>`;
+        }
+        const btn = document.querySelector('#summary-box button');
+        if (btn) { btn.textContent = 'Explore'; btn.disabled = false; }
+    }
+}
+
+// === TIER SELECTION ===
+function showTierSelection(evt) {
+    const tiers = evt.tiers || [];
+    const records = evt.catalog_records || 0;
+    const overlay = document.getElementById('summary-overlay');
+    const box = document.getElementById('summary-box');
+
+    let html = `<h2>Catalog Complete</h2>
+        <div class="summary-stats">${records.toLocaleString()} records scanned at zero cost</div>
+        <div style="margin:16px 0;font-size:12px;color:#9898b0">Choose an investigation depth:</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">`;
+
+    for (const t of tiers) {
+        html += `<div style="flex:1;min-width:140px;background:#0a0a14;border:1px solid #333;border-radius:6px;padding:14px;cursor:pointer;transition:border-color 0.2s"
+            onmouseover="this.style.borderColor='#8b7ff8'" onmouseout="this.style.borderColor='#333'"
+            onclick="selectTier(${t.budget})">
+            <div style="font-size:14px;font-weight:bold;color:#8b7ff8">${t.name}</div>
+            <div style="font-size:20px;color:#d0d0dc;margin:6px 0">$${t.budget}</div>
+            <div style="font-size:11px;color:#8888a0">${t.time_estimate}${t.estimated_nodes ? ` | ~${t.estimated_nodes} nodes` : ''}</div>
+            <div style="font-size:11px;color:#8888a0;margin-top:4px">${t.clusters_covered} anomaly clusters</div>
+            <div style="font-size:10px;color:#7a7a90;margin-top:6px;line-height:1.4">${t.depth}</div>
+        </div>`;
+    }
+
+    html += `</div>
+        <div style="margin-top:16px;display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;color:#8888a0">Custom:</span>
+            <input id="custom-budget-input" type="number" min="1" max="500" value="10"
+                style="width:70px;background:#0a0a14;border:1px solid #333;border-radius:3px;padding:4px 8px;color:#d0d0dc;font-family:inherit;font-size:13px">
+            <button onclick="selectTier(parseFloat(document.getElementById('custom-budget-input').value))"
+                style="background:#8b7ff8;color:#fff;border:none;padding:6px 16px;border-radius:3px;cursor:pointer;font-family:inherit;font-size:12px">Proceed</button>
+        </div>`;
+
+    box.innerHTML = html;
+    overlay.classList.add('active');
+    overlay.onclick = null; // don't close on backdrop click
+}
+
+function selectTier(budget) {
+    if (!budget || budget <= 0) return;
+    // Send choice back to backend via WebSocket
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'authorize', budget: budget }));
+    }
+    hideTierSelection();
+    addLog('phase', `Budget authorized: $${budget.toFixed(2)}`);
+}
+
+function hideTierSelection() {
+    document.getElementById('summary-overlay').classList.remove('active');
+}
+
+// === INIT ===
+async function init(){
+    initZoom();
+    const params=new URLSearchParams(window.location.search);
+    const eventsUrl=params.get('events');
+    if(eventsUrl){
+        document.getElementById('source-info').textContent='Loading recording...';
+        try{const resp=await fetch(eventsUrl);const text=await resp.text();const events=text.trim().split('\n').map(l=>JSON.parse(l));document.getElementById('source-info').textContent=`Playback: ${events.length} events`;startPlayback(events);}
+        catch(e){document.getElementById('source-info').textContent=`Error: ${e.message}`;}
+    } else { connectWS(); }
+}
+init();
+</script>
+</body>
+</html>
