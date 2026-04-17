@@ -255,39 +255,46 @@ hypotheses. Each should:
 STEP 4 — ASSESS
 This is the critical decision point.
 
-THE DEFAULT: DO BOTH. Produce observations from what you can see AND spawn \
-children to investigate threads you can't fully trace from here. Most nodes \
-should do both — resolve what's visible, delegate what needs focused investigation.
+CRITICAL PRINCIPLES FOR DECIDING WHEN TO RESOLVE:
 
-WHEN TO ONLY RESOLVE (no children):
-- Your scope is already focused on a SINGLE entity, package, or narrow topic
-- You've received a specific hypothesis from your parent — TEST IT directly
-- You have very few items and they all cover the same thing
-- Budget is running low (LATE STAGE or WRAPPING UP)
+You SHOULD resolve (analyze directly) when ANY of these are true:
+- Your scope is already focused on a single topic, entity, or category
+- You've received context from your parent that includes a specific hypothesis \
+to test — TEST IT, don't decompose further
+- Decomposing would just create a slightly narrower version of your current \
+scope (that's a chain, not a tree — it's wasteful)
+- You have very few items AND they all cover the same domain
 
-WHEN TO DECOMPOSE (spawn children):
-- Your scope contains DISTINCT sub-areas that need separate investigation \
-(different entities, different relationship types, different risk categories)
-- You noticed something that requires TRACING — a maintainer who controls \
-multiple packages, a dependency chain, a pattern across organizations
-- The data you see is a SAMPLE of a larger space — your children should \
-investigate specific threads, not just re-examine the same sample
-- You're in EARLY or MID exploration — there's budget to go deeper
+You SHOULD decompose only when ALL of these are true:
+- Your scope contains genuinely DISTINCT sub-domains that require separate analysis
+- You can name at least 2 meaningfully different children (not just "part 1" \
+and "part 2" of the same topic)
+- Each child would examine DIFFERENT content, not overlapping subsets
 
-ANTI-SPIN SAFETY CHECKS:
-- NEVER spawn exactly one child. Either resolve or create 2+.
-- If your child's scope would be essentially the same as yours but slightly \
-narrower, that's a chain — resolve instead.
-- Each child must examine DIFFERENT content, not overlapping subsets.
+THE SINGLE-CHILD TEST: If you're about to spawn only one child, STOP. A single \
+child means you're just passing your work down unchanged. Either resolve it \
+yourself or find a genuine decomposition into 2+ distinct areas.
 
-THE KEY QUESTION: "Did I find something that NEEDS tracing but CAN'T be \
-traced from my current data?" If yes — spawn a child to trace it. If you \
-can see everything you need — resolve.
+THE CHAIN TEST: If your parent's scope and your scope are essentially the same \
+topic just slightly narrower, you are in a chain. RESOLVE. Do not decompose further.
 
-DISCOVERY TRIGGERS DEPTH: If you find a single maintainer controlling \
-critical infrastructure, a suspicious concentration, or a hidden dependency — \
-that is a reason to GO DEEPER, not to stop. Report the observation AND \
-spawn a child to trace the blast radius.
+THE VALUE TEST: Before decomposing, ask yourself — "Will my children find \
+DIFFERENT things from each other?" If they'd all find roughly the same patterns, \
+decomposition adds cost without adding insight. Resolve instead.
+
+WHEN IN DOUBT: RESOLVE. A mediocre analysis that produces observations is \
+infinitely more valuable than a perfect decomposition that produces nothing. \
+The synthesis layer will handle combining imperfect observations from siblings. \
+Your job is to PRODUCE OBSERVATIONS, not to create the perfect scope for someone else.
+
+Remember: you are a detective examining evidence. Detectives don't keep subdividing \
+the evidence room into smaller rooms. They LOOK AT THE EVIDENCE and form hypotheses.
+
+YOU CAN DO BOTH: You can produce observations AND spawn children in the same response. \
+If during your analysis you encounter something unexpectedly anomalous — a single \
+entity controlling critical infrastructure, a suspicious pattern, a glaring gap — \
+you should BOTH report it as an observation AND request a child investigation to \
+trace that thread deeper. Discovery is a reason to go deeper, not a reason to stop.
 
 --- WHEN RESOLVING ---
 
@@ -314,12 +321,6 @@ STEP 5 — OUTPUT
 
 Produce a JSON object with this exact structure:
 {{
-    "reasoning_steps": {{
-        "survey": "2-3 sentences: what you see in scope — counts, types, entities, time range",
-        "orient": "2-3 sentences: what patterns you notice — concentrations, gaps, anomalies, surprises",
-        "hypothesize": "2-3 sentences: what you suspect and why — cite specific evidence",
-        "assess": "1-2 sentences: your decision — resolving because X, or decomposing because Y"
-    }},
     "survey": "your inventory of what's in scope",
     "observations": [
         {{

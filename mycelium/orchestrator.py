@@ -876,38 +876,42 @@ Respond ONLY with a JSON array."""}],
         )
 
     def _emit_reasoning(self, node_id: str, raw_reasoning: str):
-        """Extract reasoning steps from LLM output and emit events for visualizer."""
+        """Parse reasoning steps from the LLM's raw text output.
+
+        The node prompt asks the LLM to think through STEP 1-5 before outputting JSON.
+        We look for STEP markers in the text to extract summaries of each thinking step.
+        """
         if not raw_reasoning:
             return
 
-        # Try to parse the JSON and read reasoning_steps (preferred)
-        try:
-            import json as _json
-            parsed = _json.loads(raw_reasoning) if raw_reasoning.strip().startswith("{") else None
-            if not parsed and "```json" in raw_reasoning:
-                s = raw_reasoning.find("```json") + 7
-                e = raw_reasoning.find("```", s)
-                if e > s:
-                    parsed = _json.loads(raw_reasoning[s:e].strip())
-            if not parsed:
-                s = raw_reasoning.find("{")
-                e = raw_reasoning.rfind("}") + 1
-                if s >= 0 and e > s:
-                    parsed = _json.loads(raw_reasoning[s:e])
-
-            if parsed and "reasoning_steps" in parsed:
-                steps = parsed["reasoning_steps"]
-                for step_name in ("survey", "orient", "hypothesize", "assess"):
-                    text = steps.get(step_name, "")
-                    if text:
-                        events.emit("node_reasoning", {
-                            "node_id": node_id,
-                            "step": step_name,
-                            "summary": str(text)[:250],
-                        })
-                return
-        except (ValueError, KeyError, TypeError):
-            pass
+        text = raw_reasoning
+        for step_name in ("SURVEY", "ORIENT", "HYPOTHESIZE", "ASSESS"):
+            # Find "STEP N — STEPNAME" or just the step name
+            idx = text.upper().find(step_name)
+            if idx < 0:
+                continue
+            # Extract content after the marker
+            start = idx + len(step_name)
+            while start < len(text) and text[start] in " *\n—-:#_`1234567890.":
+                start += 1
+            # Find the end — next step or JSON block
+            end = len(text)
+            for marker in ("STEP", "ORIENT", "HYPOTHESIZE", "ASSESS", "OUTPUT", "```"):
+                mi = text.upper().find(marker, start + 20)
+                if mi > start and mi < end:
+                    end = mi
+            snippet = text[start:min(start + 300, end)].strip()
+            # Take first 2-3 sentences
+            sentences = snippet.replace('\n', ' ').split('. ')
+            summary = '. '.join(s.strip() for s in sentences[:3] if s.strip())
+            if len(summary) > 220:
+                summary = summary[:220] + '...'
+            if summary:
+                events.emit("node_reasoning", {
+                    "node_id": node_id,
+                    "step": step_name.lower(),
+                    "summary": summary,
+                })
 
     # --- Helpers ---
 
