@@ -51,7 +51,10 @@ async def start_server(port: int = 8765, run_dir: str = None):
         events_path = Path(run_dir) / "events.jsonl"
         _events_file = open(events_path, "a")
 
-    _server = await websockets.serve(_handler, "localhost", port)
+    _server = await websockets.serve(
+        _handler, "localhost", port,
+        ping_interval=30, ping_timeout=120,  # generous keepalive for long LLM calls
+    )
 
     # Serve visualizer HTML over HTTP on port 8766
     project_root = str(Path(__file__).parent.parent)
