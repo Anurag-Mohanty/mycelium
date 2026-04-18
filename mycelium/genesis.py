@@ -30,13 +30,21 @@ async def run_genesis(data_source, hints: list[str] = None,
     """
     if catalog_records and len(catalog_records) > 0:
         # Sample from the already-fetched catalog — wider coverage
+        # Strip heavy text fields — genesis needs corpus SHAPE, not full content
         sample_size = min(200, len(catalog_records))
         sample = random.sample(catalog_records, sample_size)
+        lightweight_sample = []
+        for rec in sample:
+            light = {k: v for k, v in rec.items()
+                     if k not in ("risk_factors_text", "abstract", "dependencies",
+                                  "dev_dependencies", "description")
+                     or (isinstance(v, str) and len(v) < 200)}
+            lightweight_sample.append(light)
         survey = {
             "source": "catalog_sample",
             "total_packages": f"{len(catalog_records)} cataloged (sample of {sample_size} shown)",
             "scope": "broad ecosystem survey",
-            "packages": sample,
+            "packages": lightweight_sample,
         }
     else:
         survey = await data_source.survey({})
