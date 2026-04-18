@@ -102,10 +102,11 @@ class SecEdgarSource(DataSource):
         results = self._index_cache
 
         if keyword:
-            # Support OR-separated terms and -exclusions from planner
-            terms = [t.strip().lower() for t in keyword.replace(" OR ", "|").split("|") if t.strip()]
-            include = [t for t in terms if not t.startswith("-")]
-            exclude = [t[1:] for t in terms if t.startswith("-")]
+            # Split keywords: "bank financial institution" OR "Bank OR Trust"
+            # Treat each word as a separate match term (match ANY)
+            raw_terms = keyword.replace(" OR ", " ").split()
+            include = [t.lower() for t in raw_terms if not t.startswith("-")]
+            exclude = [t[1:].lower() for t in raw_terms if t.startswith("-")]
 
             def _matches(filing):
                 text = (filing.get("company", "") + " " + filing.get("title", "")).lower()
