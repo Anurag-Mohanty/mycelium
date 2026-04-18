@@ -191,9 +191,10 @@ Respond ONLY with valid JSON, no other text.
 
 
 NODE_REASONING_PROMPT = """\
-You are a detective entering a room you've never seen before.
+You are an investigator entering a space you've never seen before. \
+You can analyze it yourself, or hire specialists to go deeper into sub-areas.
 
-CONTEXT FROM YOUR COLLEAGUE (if any):
+CONTEXT FROM YOUR MANAGER (if any):
 {parent_context}
 
 YOUR ASSIGNED AREA:
@@ -253,48 +254,33 @@ hypotheses. Each should:
 - Note which attention lenses it relates to
 
 STEP 4 — ASSESS
-This is the critical decision point.
+This is the critical decision point. You are a manager deciding how to deploy \
+your team, not a solo analyst trying to do everything yourself.
 
-CRITICAL PRINCIPLES FOR DECIDING WHEN TO RESOLVE:
+THE COVERAGE QUESTION: Can you personally do justice to all {doc_count} items? \
+A single analyst examining 80+ items will miss patterns that a team of 3-4 \
+specialists would catch. If your scope spans genuinely different sub-domains \
+(different authors, different purposes, different ecosystems), decompose. \
+Your observations from this level plus your children's deeper analysis is \
+strictly better than your observations alone.
 
-You SHOULD resolve (analyze directly) when ANY of these are true:
-- Your scope is already focused on a single topic, entity, or category
-- You've received context from your parent that includes a specific hypothesis \
-to test — TEST IT, don't decompose further
-- Decomposing would just create a slightly narrower version of your current \
-scope (that's a chain, not a tree — it's wasteful)
-- You have very few items AND they all cover the same domain
+YOU CAN DO BOTH: Produce observations from what you see at this level AND \
+spawn children to go deeper. Your initial observations set the context. Your \
+children trace the threads. This is almost always the right move when you have \
+budget and diverse data.
 
-You SHOULD decompose only when ALL of these are true:
-- Your scope contains genuinely DISTINCT sub-domains that require separate analysis
-- You can name at least 2 meaningfully different children (not just "part 1" \
-and "part 2" of the same topic)
-- Each child would examine DIFFERENT content, not overlapping subsets
+WHEN TO RESOLVE (analyze directly, no children):
+- Your scope is focused on a single topic, entity, or narrow category
+- Your parent gave you a specific hypothesis to test — TEST IT directly
+- You have few items (under 20) that all cover the same domain
+- Your budget is nearly exhausted
 
-THE SINGLE-CHILD TEST: If you're about to spawn only one child, STOP. A single \
-child means you're just passing your work down unchanged. Either resolve it \
-yourself or find a genuine decomposition into 2+ distinct areas.
-
-THE CHAIN TEST: If your parent's scope and your scope are essentially the same \
-topic just slightly narrower, you are in a chain. RESOLVE. Do not decompose further.
-
-THE VALUE TEST: Before decomposing, ask yourself — "Will my children find \
-DIFFERENT things from each other?" If they'd all find roughly the same patterns, \
-decomposition adds cost without adding insight. Resolve instead.
-
-WHEN IN DOUBT: RESOLVE. A mediocre analysis that produces observations is \
-infinitely more valuable than a perfect decomposition that produces nothing. \
-The synthesis layer will handle combining imperfect observations from siblings. \
-Your job is to PRODUCE OBSERVATIONS, not to create the perfect scope for someone else.
-
-Remember: you are a detective examining evidence. Detectives don't keep subdividing \
-the evidence room into smaller rooms. They LOOK AT THE EVIDENCE and form hypotheses.
-
-YOU CAN DO BOTH: You can produce observations AND spawn children in the same response. \
-If during your analysis you encounter something unexpectedly anomalous — a single \
-entity controlling critical infrastructure, a suspicious pattern, a glaring gap — \
-you should BOTH report it as an observation AND request a child investigation to \
-trace that thread deeper. Discovery is a reason to go deeper, not a reason to stop.
+ANTI-SPIN CHECKS (violations waste budget):
+- NEVER spawn exactly one child — that's passing the buck, not delegating
+- NEVER create children whose scope is just a slightly narrower version of yours \
+(that's a chain, not a tree)
+- Each child must examine DIFFERENT content and find DIFFERENT things
+- If all children would find the same patterns, resolve instead
 
 --- WHEN RESOLVING ---
 

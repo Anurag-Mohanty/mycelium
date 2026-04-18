@@ -231,7 +231,11 @@ class WorkerNode:
         lenses_str = ", ".join(self.lenses)
         parent_ctx = self.directive.parent_context or "You are the first to enter. No prior context."
 
-        budget_pct = (self.budget / self.total_budget * 100) if self.total_budget > 0 else 0
+        # Budget context: show the POOL total for ambition, but use the worker's
+        # own allocation percentage for the stage signal. This matches the old
+        # _explore_node behavior where each node saw the pool's remaining balance.
+        remaining_own = max(0, self.budget - self.spent)
+        budget_pct = (remaining_own / self.budget * 100) if self.budget > 0 else 0
         if budget_pct > 70:
             budget_stage = "EARLY STAGE — explore broadly and ambitiously. Decompose large spaces."
         elif budget_pct > 40:
@@ -241,16 +245,22 @@ class WorkerNode:
         else:
             budget_stage = "WRAPPING UP — resolve immediately with current observations."
 
+        est_nodes = int(remaining_own / 0.05)
+        capacity = (
+            f"At ~$0.05/node, you can afford ~{est_nodes} more reasoning steps. "
+            f"Children that focus on subsets cost ~$0.04 each."
+        ) if est_nodes >= 2 else ""
+
         prompt = NODE_REASONING_PROMPT.format(
             parent_context=parent_ctx,
             scope_description=self.directive.scope.description,
             lenses=lenses_str,
-            budget_remaining=self.budget,
-            total_budget=self.total_budget,
+            budget_remaining=remaining_own,
+            total_budget=self.budget,
             budget_pct=budget_pct,
             budget_stage=budget_stage,
-            capacity_context="",
-            segment_context="",
+            capacity_context=capacity,
+            segment_context=f"- This segment is part of a ${self.total_budget:.2f} exploration pool.\n",
             doc_count=len(documents),
             fetched_data=fetched_data,
             force_resolve=force_resolve,

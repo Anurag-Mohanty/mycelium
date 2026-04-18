@@ -6,31 +6,41 @@ influence lens weighting (not selection).
 """
 
 import json
+import random
 import anthropic
 from .prompts import GENESIS_PROMPT
 
 
-async def run_genesis(data_source, hints: list[str] = None) -> dict:
+async def run_genesis(data_source, hints: list[str] = None,
+                      catalog_records: list[dict] = None) -> dict:
     """Survey the corpus shape and generate attention lenses.
 
-    Genesis sees RAW survey data (200 packages), not pre-digested catalog stats.
-    This keeps it curious — it designs broad exploration from a sample,
-    rather than treating statistics as conclusions.
+    If catalog_records provided, samples from those (wider coverage from
+    the 2000 already fetched). Otherwise falls back to survey() which
+    fetches ~200 fresh. Either way, genesis sees RAW records, not stats.
 
     Args:
         data_source: A DataSource instance to survey
         hints: Optional user context to influence lens generation
+        catalog_records: Raw records from fetch_bulk_metadata (if available)
 
     Returns:
         dict with corpus_summary, lenses, suggested_entry_points,
         natural_structure, and token usage
     """
-    # If we have catalog stats, use those (richer, from thousands of records)
-    # Otherwise fall back to the data source's survey method
-    # Genesis sees raw survey data for segment design.
-    # If catalog already fetched bulk records, use those (bigger sample).
-    # Otherwise fall back to survey() which fetches ~200.
-    survey = await data_source.survey({})
+    if catalog_records and len(catalog_records) > 0:
+        # Sample from the already-fetched catalog — wider coverage
+        sample_size = min(200, len(catalog_records))
+        sample = random.sample(catalog_records, sample_size)
+        survey = {
+            "source": "catalog_sample",
+            "total_packages": f"{len(catalog_records)} cataloged (sample of {sample_size} shown)",
+            "scope": "broad ecosystem survey",
+            "packages": sample,
+        }
+    else:
+        survey = await data_source.survey({})
+
     corpus_metadata = json.dumps(survey, indent=2)
 
     hints_str = "\n".join(f"- {h}" for h in hints) if hints else \

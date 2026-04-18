@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .schemas import (
     Directive, Scope, ExplorationStats, NodeResult, SynthesisResult,
-    BudgetPool, ValidationResult, ImpactResult,
+    BudgetPool, ValidationResult, ImpactResult, Observation, Source,
 )
 from .genesis import run_genesis
 from .planner import create_plan
@@ -144,6 +144,7 @@ class Orchestrator:
         events.emit("phase_change", {"phase": "catalog"})
 
         catalog_stats = None
+        bulk_records = None
         if hasattr(self.data_source, 'fetch_bulk_metadata'):
             def _catalog_progress(p):
                 fetched = p.get("fetched", 0)
@@ -221,7 +222,13 @@ class Orchestrator:
         # --- Phase 0: Genesis (LLM reasons about the catalog statistics) ---
         print(f"\n  [GENESIS] Surveying corpus structure...")
         events.emit("phase_change", {"phase": "genesis"})
-        self.genesis_result = await run_genesis(self.data_source, self.hints)
+        # Pass catalog records so genesis can sample from the broader set
+        # (2000 records) instead of fetching a fresh ~200 via survey().
+        # These are lightweight (headers + descriptions), not full metadata.
+        self.genesis_result = await run_genesis(
+            self.data_source, self.hints,
+            catalog_records=bulk_records,
+        )
         self.budget.record("overhead", self.genesis_result.get("cost", 0))
         self._update_tokens(self.genesis_result.get("token_usage", {}))
 
@@ -318,12 +325,15 @@ class Orchestrator:
         ))
         segment_results = [r for r in segment_results if isinstance(r, dict)]
 
-        # Record exploration spending
-        total_explore_cost = sum(w.spent + sum(c.spent for c in w.child_workers) for w in segment_workers)
+        # Record exploration spending (walk full tree, not just direct children)
+        def _total_cost(worker):
+            return worker.spent + sum(_total_cost(c) for c in worker.child_workers)
+        total_explore_cost = sum(_total_cost(w) for w in segment_workers)
         self.budget.record("exploration", total_explore_cost)
 
-        # Collect stats from workers
+        # Collect stats and populate all_node_results from worker tree
         self._collect_worker_stats(segment_workers)
+        self._collect_worker_node_results(segment_workers)
 
         # Root-level synthesis across all segments
         if len(segment_results) > 1 and self.budget.can_spend():
@@ -910,6 +920,17 @@ Respond ONLY with a JSON array."""}],
 
         # Save worker nodes to disk
         self._save_worker_tree(workers)
+
+    def _collect_worker_node_results(self, workers: list):
+        """Walk the worker tree and populate all_node_results for downstream pipeline."""
+        def _walk(worker):
+            self.all_node_results.append(self._worker_result_to_node_result(worker._result()))
+            self._populate_kg(self.all_node_results[-1])
+            for child in worker.child_workers:
+                _walk(child)
+
+        for w in workers:
+            _walk(w)
 
     def _save_worker_tree(self, workers: list):
         """Save all worker nodes to disk for the report."""
