@@ -102,10 +102,18 @@ class SecEdgarSource(DataSource):
         results = self._index_cache
 
         if keyword:
-            kw = keyword.lower()
-            results = [f for f in results if kw in f.get("company", "").lower()
-                       or kw in f.get("form_type", "").lower()
-                       or kw in f.get("title", "").lower()]
+            # Support OR-separated terms and -exclusions from planner
+            terms = [t.strip().lower() for t in keyword.replace(" OR ", "|").split("|") if t.strip()]
+            include = [t for t in terms if not t.startswith("-")]
+            exclude = [t[1:] for t in terms if t.startswith("-")]
+
+            def _matches(filing):
+                text = (filing.get("company", "") + " " + filing.get("title", "")).lower()
+                if exclude and any(ex in text for ex in exclude):
+                    return False
+                return any(inc in text for inc in include) if include else True
+
+            results = [f for f in results if _matches(f)]
         if sic:
             results = [f for f in results if f.get("sic", "").startswith(sic)]
 
