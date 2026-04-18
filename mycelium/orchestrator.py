@@ -189,6 +189,13 @@ class Orchestrator:
                     },
                 })
 
+                # Store anomaly data for passing to exploration nodes
+                self._survey_anomalies = {
+                    "outliers": catalog_stats.get("outliers", []),
+                    "unusual_combinations": catalog_stats.get("unusual_combinations", []),
+                    "concentrations": catalog_stats.get("concentrations", []),
+                }
+
                 # Translate raw stats into human-readable descriptions (one cheap LLM call)
                 print("  [CATALOG] Translating findings into plain language...")
                 catalog_stats = await self._translate_catalog(catalog_stats)
@@ -296,7 +303,14 @@ class Orchestrator:
         segment_budget_each = exploration_budget / max(1, len(segments))
 
         segment_workers = []
+        all_anomalies = getattr(self, '_survey_anomalies', {})
         for i, seg in enumerate(segments, 1):
+            # Filter anomalies relevant to this segment's scope
+            seg_anomalies = _filter_anomalies(
+                all_anomalies,
+                seg.get("scope_description", seg["name"]),
+                seg.get("filters", {}).get("keyword", seg["name"]),
+            )
             directive = Directive(
                 scope=Scope(
                     source=self.data_source.__class__.__name__,
@@ -307,6 +321,7 @@ class Orchestrator:
                 parent_context=f"Planner assigned this segment: {seg.get('reasoning', '')}",
                 tree_position=str(i),
                 segment_id=seg["name"],
+                survey_anomalies=seg_anomalies,
             )
             worker = WorkerNode(
                 directive=directive,
@@ -1231,3 +1246,63 @@ def _parse_json(text: str) -> dict:
     if s >= 0 and e > s:
         return json.loads(text[s:e])
     raise ValueError("Could not extract JSON")
+
+
+def _filter_anomalies(all_anomalies: dict, scope_description: str,
+                      keyword: str) -> list[dict]:
+    """Filter survey anomalies to those relevant to a scope.
+
+    Domain-agnostic: matches scope keywords against record_ids,
+    descriptions, field values, and anomaly text. No field-name
+    knowledge — pure string matching.
+    """
+    if not all_anomalies:
+        return []
+
+    # Build search terms from scope
+    terms = set()
+    for word in (scope_description + " " + keyword).lower().split():
+        word = word.strip(".,;:'\"()[]{}!?")
+        if len(word) > 2:
+            terms.add(word)
+
+    relevant = []
+
+    def _matches(item: dict) -> bool:
+        """Check if any search term appears in the anomaly's text fields."""
+        text = " ".join(str(v) for v in item.values() if isinstance(v, (str, int, float))).lower()
+        return any(t in text for t in terms)
+
+    for outlier in all_anomalies.get("outliers", []):
+        if _matches(outlier):
+            relevant.append({
+                "type": "outlier",
+                "record": outlier.get("record_id", "?"),
+                "field": outlier.get("field", "?"),
+                "value": outlier.get("value"),
+                "z_score": outlier.get("z_score"),
+                "direction": outlier.get("direction"),
+                "summary": outlier.get("record_summary", ""),
+            })
+
+    for combo in all_anomalies.get("unusual_combinations", []):
+        if _matches(combo):
+            relevant.append({
+                "type": "unusual_combination",
+                "description": combo.get("description", ""),
+                "overrepresentation": combo.get("overrepresentation"),
+            })
+
+    for conc in all_anomalies.get("concentrations", []):
+        if _matches(conc):
+            relevant.append({
+                "type": "concentration",
+                "field": conc.get("field", "?"),
+                "description": (
+                    f"{conc.get('concentration_pct', '?')}% in top 3 values"
+                    if conc.get("concentration_pct")
+                    else f"{conc.get('pct', '?')}% identical ({conc.get('dominant_value', '?')})"
+                ),
+            })
+
+    return relevant[:15]  # cap to avoid bloating the prompt

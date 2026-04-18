@@ -37,6 +37,7 @@ class Directive:
     tree_position: str = "ROOT"
     chain_depth: int = 0
     segment_id: Optional[str] = None  # which planner segment this belongs to
+    survey_anomalies: list = field(default_factory=list)  # statistical anomalies relevant to this scope
 
 
 @dataclass

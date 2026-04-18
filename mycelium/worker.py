@@ -131,6 +131,7 @@ class WorkerNode:
                 tree_position=f"{self.pos}.{i}" if self.pos != "ROOT" else str(i),
                 chain_depth=(self.directive.chain_depth + 1) if n_children == 1 else 0,
                 segment_id=self.segment_id,
+                survey_anomalies=self.directive.survey_anomalies,
             )
 
             child = WorkerNode(
@@ -251,6 +252,9 @@ class WorkerNode:
             f"Children that focus on subsets cost ~$0.04 each."
         ) if est_nodes >= 2 else ""
 
+        # Build anomaly context from survey data
+        anomaly_ctx = _format_anomalies(self.directive.survey_anomalies, documents)
+
         prompt = NODE_REASONING_PROMPT.format(
             parent_context=parent_ctx,
             scope_description=self.directive.scope.description,
@@ -262,7 +266,7 @@ class WorkerNode:
             capacity_context=capacity,
             segment_context=f"- This segment is part of a ${self.total_budget:.2f} exploration pool.\n",
             doc_count=len(documents),
-            fetched_data=fetched_data,
+            fetched_data=anomaly_ctx + fetched_data,
             force_resolve=force_resolve,
         )
 
@@ -366,6 +370,7 @@ class WorkerNode:
                 parent_id=self.node_id,
                 tree_position=f"{self.pos}.F{i}",
                 segment_id=self.segment_id,
+                survey_anomalies=self.directive.survey_anomalies,
             )
 
             child = WorkerNode(
@@ -535,6 +540,55 @@ Return JSON:
 }}
 
 Respond ONLY with valid JSON, no other text."""
+
+
+def _format_anomalies(anomalies: list[dict], documents: list[dict]) -> str:
+    """Format survey anomalies relevant to the fetched documents.
+
+    Filters anomalies to those referencing records in the current scope,
+    then formats as a text block prepended to the data. Domain-agnostic.
+    """
+    if not anomalies:
+        return ""
+
+    # Build set of record identifiers from fetched documents
+    doc_ids = set()
+    for doc in documents:
+        for key in ("name", "id", "title"):
+            val = doc.get(key)
+            if val:
+                doc_ids.add(str(val).lower())
+
+    # Filter anomalies to those matching fetched records or scope-wide stats
+    relevant = []
+    for a in anomalies:
+        record = str(a.get("record", "")).lower()
+        # Include if it references a record we fetched, or if it's a
+        # scope-wide statistical finding (concentration, unusual combo)
+        if record in doc_ids or a.get("type") in ("concentration", "unusual_combination"):
+            relevant.append(a)
+
+    if not relevant:
+        return ""
+
+    lines = ["STATISTICAL ANOMALIES IN YOUR SCOPE (from programmatic survey):"]
+    for a in relevant[:10]:
+        if a["type"] == "outlier":
+            lines.append(
+                f"  - {a.get('record', '?')}: {a.get('field', '?')} = {a.get('value', '?')} "
+                f"(z-score {a.get('z_score', '?')}, {a.get('direction', '?')} outlier)"
+            )
+        elif a["type"] == "unusual_combination":
+            lines.append(f"  - {a.get('description', '?')}")
+        elif a["type"] == "concentration":
+            lines.append(f"  - {a.get('field', '?')}: {a.get('description', '?')}")
+
+    lines.append(
+        "\nThe statistical survey flagged these anomalies in your scope. "
+        "Investigate them — determine whether they're genuinely surprising "
+        "or easily explained.\n\n"
+    )
+    return "\n".join(lines)
 
 
 def _format_documents(documents: list[dict]) -> str:
