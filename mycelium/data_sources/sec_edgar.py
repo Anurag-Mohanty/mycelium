@@ -78,12 +78,11 @@ class SecEdgarSource(DataSource):
         }
 
     async def fetch(self, filters: dict, max_results: int = 50) -> list[dict]:
-        """Fetch filing records matching filters.
+        """Fetch filing records with actual content.
 
-        Two-level fetch:
-        - Broad queries (keyword only): return index metadata
-        - Targeted queries (specific companies): fetch actual filing
-          content including risk factors
+        Always enriches with real filing data: fetches the 10-K HTML and
+        extracts Risk Factors text. The agent gets content to reason about,
+        not just index metadata.
         """
         keyword = filters.get("keyword", "")
         form_type = filters.get("form_type", "10-K")
@@ -91,19 +90,17 @@ class SecEdgarSource(DataSource):
         companies = filters.get("companies", [])
         sic = filters.get("sic", "")
 
-        # If specific companies requested, do content-level fetch
+        # If specific companies requested, fetch their filings directly
         if companies:
             return await self._fetch_company_filings(companies, years, max_results)
 
-        # Otherwise, return index metadata
+        # Otherwise, find matching companies from the index and fetch content
         if not self._index_cache:
             self._index_cache = await self._fetch_index(years, form_type)
 
-        results = self._index_cache
-
+        # Filter index to matching filings
+        matches = self._index_cache
         if keyword:
-            # Split keywords: "bank financial institution" OR "Bank OR Trust"
-            # Treat each word as a separate match term (match ANY)
             raw_terms = keyword.replace(" OR ", " ").split()
             include = [t.lower() for t in raw_terms if not t.startswith("-")]
             exclude = [t[1:].lower() for t in raw_terms if t.startswith("-")]
@@ -114,11 +111,27 @@ class SecEdgarSource(DataSource):
                     return False
                 return any(inc in text for inc in include) if include else True
 
-            results = [f for f in results if _matches(f)]
+            matches = [f for f in matches if _matches(f)]
         if sic:
-            results = [f for f in results if f.get("sic", "").startswith(sic)]
+            matches = [f for f in matches if f.get("sic", "").startswith(sic)]
 
-        return results[:max_results]
+        if not matches:
+            return []
+
+        # Get unique company names from matches, fetch their actual filings
+        seen = set()
+        unique_companies = []
+        for m in matches:
+            name = m.get("company", "")
+            if name and name not in seen:
+                seen.add(name)
+                unique_companies.append(name)
+            if len(unique_companies) >= max_results:
+                break
+
+        return await self._fetch_company_filings(
+            unique_companies[:max_results], years, max_results
+        )
 
     async def _fetch_company_filings(self, companies: list[str],
                                       years: list[int],
