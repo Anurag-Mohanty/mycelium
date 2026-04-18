@@ -238,38 +238,12 @@ statistics), use them to understand the SHAPE of your space before deep-diving i
 specific items. Broad survey first. Targeted depth second. Not the reverse.
 
 STEP 2 — ORIENT
-Your job is NOT to report patterns that any informed person would already know. \
-Your job is to find SPECIFIC ANOMALIES — things that contradict what you'd \
-expect from the data.
+Now read more carefully. Look at the details and content — that's where the \
+substance is. What patterns do you notice? What's concentrated? What's sparse? \
+What's inconsistent? What changed over time? What surprises you? What would you \
+expect to see that's missing? What relationships or dependencies seem fragile?
 
-Look for:
-- Metadata that contradicts itself (a package marked "internal" with massive \
-external usage)
-- Numbers that don't add up (a dependency with MORE downloads than the package \
-it depends on)
-- Dates that tell a story (a critical package whose maintainer last published \
-3 years ago)
-- Relationships that shouldn't exist (a community package depending on a \
-corporate internal tool)
-- Gaps where something should be present but isn't
-
-Every observation should cite a SPECIFIC item name, a SPECIFIC number, a \
-SPECIFIC date, or a SPECIFIC metadata field. If your observation could be \
-written without looking at the data — if it's just general knowledge about \
-this domain — it's not a finding, it's noise.
-
-BAD observation: "React packages are controlled by Facebook through automated \
-accounts"
-→ This is common knowledge. Skip it.
-
-GOOD observation: "botbuilder-stdlib has the npm keyword 'internal only' in its \
-package.json but receives 1,122,841 monthly downloads from external consumers \
-and is listed as a dependency of botbuilder-core which has 1,102,167 downloads"
-→ This is a specific contradiction found in the data that nobody has reported.
-
-Read the actual content of each item — the fields, the numbers, the dates, the \
-relationships. That's where the substance is. Develop your curiosity from what \
-you actually observe, not from prior expectations.
+Develop your curiosity from what you actually observe, not from prior expectations.
 
 STEP 3 — HYPOTHESIZE
 Based on what you noticed, what might be true? What might be hiding here? Form \
@@ -310,16 +284,18 @@ ANTI-SPIN CHECKS (violations waste budget):
 
 --- WHEN RESOLVING ---
 
-Read the actual data. Every observation must cite a SPECIFIC item with SPECIFIC \
-numbers, dates, or metadata fields. The bar for an observation is: would this \
-surprise someone who already knows this domain? If not, skip it.
+Read the details carefully. Your observations should cite SPECIFIC DATA — not just \
+names or titles, but actual content, numbers, relationships, versions, dates, and \
+anomalies you found in the records. An observation that says "Package X is popular" \
+is worthless. An observation that says "Package X has 5M weekly downloads but only \
+1 maintainer who last published 18 months ago" is valuable.
 
-Focus on anomalies and contradictions:
-- Fields that contradict each other within the same item
-- Numbers that violate expected relationships (dependency has more usage than parent)
-- Items where declared state doesn't match actual state
-- Temporal anomalies (critical item untouched for years, sudden activity bursts)
-- Missing things that should exist given other evidence
+Look for:
+- Specific data points, definitions, or configurations
+- Relationships and dependencies between items
+- Concentrations, imbalances, or single points of failure
+- Temporal patterns (gaps, bursts, staleness)
+- Inconsistencies between declared and actual state
 
 --- WHEN DECOMPOSING ---
 
