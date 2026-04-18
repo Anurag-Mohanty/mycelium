@@ -194,6 +194,11 @@ class Orchestrator:
                     "outliers": catalog_stats.get("outliers", []),
                     "unusual_combinations": catalog_stats.get("unusual_combinations", []),
                     "concentrations": catalog_stats.get("concentrations", []),
+                    "content_anomalies": catalog_stats.get("content_anomalies", []),
+                    "entity_anomalies": catalog_stats.get("entity_anomalies", []),
+                    "graph_anomalies": catalog_stats.get("graph_anomalies", []),
+                    "similarity_anomalies": catalog_stats.get("similarity_anomalies", []),
+                    "velocity_anomalies": catalog_stats.get("velocity_anomalies", []),
                 }
 
                 # Translate raw stats into human-readable descriptions (one cheap LLM call)
@@ -1305,4 +1310,14 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
                 ),
             })
 
-    return relevant[:15]  # cap to avoid bloating the prompt
+    # New anomaly types from Groups B-F: pass through with description
+    for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
+                "similarity_anomalies", "velocity_anomalies"):
+        for a in all_anomalies.get(key, []):
+            if _matches(a):
+                relevant.append({
+                    "type": a.get("type", "anomaly"),
+                    "description": a.get("description", ""),
+                })
+
+    return relevant[:20]  # cap to avoid bloating the prompt
