@@ -23,6 +23,7 @@ load_dotenv()
 
 from mycelium.data_sources.federal_register import FederalRegisterSource
 from mycelium.data_sources.npm_registry import NpmRegistrySource
+from mycelium.data_sources.sec_edgar import SecEdgarSource
 from mycelium.genesis import run_genesis
 from mycelium.orchestrator import Orchestrator
 from mycelium.reporter import generate_report
@@ -158,9 +159,11 @@ def create_data_source(name):
         return FederalRegisterSource()
     elif name == "npm":
         return NpmRegistrySource()
+    elif name == "sec_edgar" or name == "sec":
+        return SecEdgarSource()
     else:
         print(f"ERROR: Unknown data source '{name}'")
-        print("Available: federal_register, npm")
+        print("Available: federal_register, npm, sec_edgar")
         sys.exit(1)
 
 
