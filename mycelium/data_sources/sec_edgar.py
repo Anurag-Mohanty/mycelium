@@ -78,30 +78,142 @@ class SecEdgarSource(DataSource):
         }
 
     async def fetch(self, filters: dict, max_results: int = 50) -> list[dict]:
-        """Fetch filing records matching filters."""
+        """Fetch filing records matching filters.
+
+        Two-level fetch:
+        - Broad queries (keyword only): return index metadata
+        - Targeted queries (specific companies): fetch actual filing
+          content including risk factors
+        """
         keyword = filters.get("keyword", "")
         form_type = filters.get("form_type", "10-K")
-        years = filters.get("years", [2023, 2024, 2025])
+        years = filters.get("years", [2021, 2022, 2023, 2024, 2025])
         companies = filters.get("companies", [])
         sic = filters.get("sic", "")
 
-        # Use cached index if available, otherwise fetch
+        # If specific companies requested, do content-level fetch
+        if companies:
+            return await self._fetch_company_filings(companies, years, max_results)
+
+        # Otherwise, return index metadata
         if not self._index_cache:
             self._index_cache = await self._fetch_index(years, form_type)
 
         results = self._index_cache
 
-        # Filter
         if keyword:
-            results = [f for f in results if keyword.lower() in f.get("company", "").lower()
-                       or keyword.lower() in f.get("form_type", "").lower()]
-        if companies:
-            company_set = {c.lower() for c in companies}
-            results = [f for f in results if f.get("company", "").lower() in company_set]
+            kw = keyword.lower()
+            results = [f for f in results if kw in f.get("company", "").lower()
+                       or kw in f.get("form_type", "").lower()
+                       or kw in f.get("title", "").lower()]
         if sic:
             results = [f for f in results if f.get("sic", "").startswith(sic)]
 
         return results[:max_results]
+
+    async def _fetch_company_filings(self, companies: list[str],
+                                      years: list[int],
+                                      max_results: int = 50) -> list[dict]:
+        """Fetch actual 10-K content for specific companies.
+
+        For each company: get submissions → find 10-K filings → fetch HTML →
+        extract risk factors. Returns enriched records with filing text.
+        """
+        results = []
+
+        for company_name in companies:
+            if len(results) >= max_results:
+                break
+
+            # Find CIK from cached index
+            cik = self._find_cik(company_name)
+            if not cik:
+                continue
+
+            # Fetch submissions to get filing history + document URLs
+            submissions = await self._get_submissions(cik)
+            if not submissions:
+                continue
+
+            actual_name = submissions.get("name", company_name)
+            sic = submissions.get("sic", "")
+            sic_desc = submissions.get("sicDescription", "")
+
+            recent = submissions.get("filings", {}).get("recent", {})
+            forms = recent.get("form", [])
+            dates = recent.get("filingDate", [])
+            accessions = recent.get("accessionNumber", [])
+            primary_docs = recent.get("primaryDocument", [])
+
+            for j, form in enumerate(forms):
+                if form != "10-K" or j >= len(dates):
+                    continue
+                year = int(dates[j][:4]) if dates[j] else 0
+                if year not in years:
+                    continue
+                if len(results) >= max_results:
+                    break
+
+                accession = accessions[j] if j < len(accessions) else ""
+                primary_doc = primary_docs[j] if j < len(primary_docs) else ""
+
+                if not accession or not primary_doc:
+                    continue
+
+                # Fetch actual filing document
+                accession_path = accession.replace("-", "")
+                doc_url = (f"{SEC_BASE}/Archives/edgar/data/{cik}/"
+                           f"{accession_path}/{primary_doc}")
+
+                resp = await self._get(doc_url)
+                if not resp:
+                    continue
+
+                risk_factors = _extract_risk_factors(resp.text)
+
+                record = {
+                    "id": f"{cik}/{accession}",
+                    "title": f"{actual_name} — 10-K ({dates[j]})",
+                    "type": "sec_filing",
+                    "company": actual_name,
+                    "cik": cik,
+                    "sic": sic,
+                    "sic_description": sic_desc,
+                    "form_type": "10-K",
+                    "date": dates[j],
+                    "year": year,
+                    "accession": accession,
+                    "url": doc_url,
+                    "risk_factors_text": (risk_factors or "")[:5000],
+                    "risk_factors_length": len(risk_factors) if risk_factors else 0,
+                    "risk_factors_word_count": len(risk_factors.split()) if risk_factors else 0,
+                }
+
+                # Build an abstract for the LLM
+                rf_preview = (risk_factors[:1000] + "...") if risk_factors and len(risk_factors) > 1000 else (risk_factors or "No risk factors extracted")
+                record["abstract"] = (
+                    f"SEC 10-K Annual Report — {actual_name} (CIK {cik})\n"
+                    f"Filed: {dates[j]} | Industry: {sic_desc} (SIC {sic})\n"
+                    f"Risk factors: {record['risk_factors_word_count']:,} words\n\n"
+                    f"Risk Factors Preview:\n{rf_preview}"
+                )
+
+                results.append(record)
+
+        return results
+
+    def _find_cik(self, company_name: str) -> str | None:
+        """Find CIK from cached index by company name (fuzzy match)."""
+        name_lower = company_name.lower().strip()
+        # Try exact match first
+        for filing in self._index_cache:
+            if filing.get("company", "").lower().strip() == name_lower:
+                return filing["cik"]
+        # Try substring match
+        for filing in self._index_cache:
+            if name_lower in filing.get("company", "").lower():
+                return filing["cik"]
+        return None
 
     async def fetch_document(self, doc_id: str) -> dict:
         """Fetch a single filing's metadata by accession number."""
@@ -259,52 +371,59 @@ class SecEdgarSource(DataSource):
 def _extract_risk_factors(html: str) -> str | None:
     """Extract Risk Factors section from 10-K HTML.
 
-    Risk Factors is Item 1A, typically between "Item 1A" and "Item 1B"
-    or "Item 2". Uses regex on stripped text — no BeautifulSoup needed.
+    Risk Factors is Item 1A, typically between "Item 1A" and "Item 1B".
+    The first occurrence is usually in the table of contents — we want
+    the SECOND occurrence which is the actual section content.
     """
     # Strip HTML tags for text extraction
     text = re.sub(r'<[^>]+>', ' ', html)
+    # Decode HTML entities
+    import html as html_mod
+    text = html_mod.unescape(text)
     text = re.sub(r'\s+', ' ', text)
 
-    # Find "Item 1A" marker
-    patterns = [
-        r'Item\s+1A[\.\s\-—]+\s*Risk\s+Factors',
-        r'ITEM\s+1A[\.\s\-—]+\s*RISK\s+FACTORS',
-        r'Item\s+1A\b',
-        r'ITEM\s+1A\b',
-    ]
+    # Find ALL occurrences of "Item 1A" — we want the last substantial one
+    pattern = re.compile(r'Item\s+1A[\.\s\-—:]+\s*Risk\s+Factors', re.IGNORECASE)
+    matches = list(pattern.finditer(text))
 
-    start_pos = None
-    for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            start_pos = match.start()
-            break
+    if not matches:
+        # Try broader pattern
+        pattern2 = re.compile(r'ITEM\s+1A\b', re.IGNORECASE)
+        matches = list(pattern2.finditer(text))
 
-    if start_pos is None:
+    if not matches:
         return None
 
-    # Find the end — "Item 1B" or "Item 2"
+    # Use the LAST match — it's the actual section, not the TOC reference.
+    # If only one match, use it. If multiple, skip the first (TOC).
+    start_match = matches[-1] if len(matches) > 1 else matches[0]
+    start_pos = start_match.start()
+
+    # Find the end — "Item 1B" or "Item 2" AFTER the start
     end_patterns = [
-        r'Item\s+1B[\.\s\-—]+',
-        r'ITEM\s+1B[\.\s\-—]+',
-        r'Item\s+2[\.\s\-—]+\s*Properties',
-        r'ITEM\s+2[\.\s\-—]+\s*PROPERTIES',
+        r'Item\s+1B[\.\s\-—:]+',
+        r'ITEM\s+1B[\.\s\-—:]+',
+        r'Item\s+2[\.\s\-—:]+\s*Properties',
+        r'ITEM\s+2[\.\s\-—:]+\s*PROPERTIES',
     ]
 
     end_pos = len(text)
-    for pattern in end_patterns:
-        match = re.search(pattern, text[start_pos + 50:], re.IGNORECASE)
+    for ep in end_patterns:
+        match = re.search(ep, text[start_pos + 100:], re.IGNORECASE)
         if match:
-            candidate = start_pos + 50 + match.start()
+            candidate = start_pos + 100 + match.start()
             if candidate < end_pos:
                 end_pos = candidate
             break
 
     risk_text = text[start_pos:end_pos].strip()
 
-    # Cap at 50K chars to avoid massive sections
-    if len(risk_text) > 50000:
-        risk_text = risk_text[:50000] + "... [truncated]"
+    # Skip if too short (probably just a TOC entry)
+    if len(risk_text) < 500:
+        return None
+
+    # Cap at 100K chars
+    if len(risk_text) > 100000:
+        risk_text = risk_text[:100000] + "... [truncated]"
 
     return risk_text
