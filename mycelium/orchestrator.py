@@ -335,6 +335,7 @@ class Orchestrator:
                 total_budget=self.budget.total,
                 lenses=lenses,
                 semaphore=self._semaphore,
+                budget_pool=self.budget,
             )
             segment_workers.append(worker)
 
@@ -345,11 +346,8 @@ class Orchestrator:
         ))
         segment_results = [r for r in segment_results if isinstance(r, dict)]
 
-        # Record exploration spending (walk full tree, not just direct children)
-        def _total_cost(worker):
-            return worker.spent + sum(_total_cost(c) for c in worker.child_workers)
-        total_explore_cost = sum(_total_cost(w) for w in segment_workers)
-        self.budget.record("exploration", total_explore_cost)
+        # Workers record spending directly to the budget pool now.
+        # No post-hoc recording needed.
 
         # Collect stats and populate all_node_results from worker tree
         self._collect_worker_stats(segment_workers)

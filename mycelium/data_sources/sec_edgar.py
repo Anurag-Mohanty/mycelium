@@ -206,7 +206,7 @@ class SecEdgarSource(DataSource):
                     "year": year,
                     "accession": accession,
                     "url": doc_url,
-                    "risk_factors_text": (risk_factors or "")[:5000],
+                    "risk_factors_text": risk_factors or "",
                     "risk_factors_length": len(risk_factors) if risk_factors else 0,
                     "risk_factors_word_count": len(risk_factors.split()) if risk_factors else 0,
                 }
@@ -445,7 +445,7 @@ def _extract_risk_factors(html: str) -> str | None:
         return None
 
     # Cap at 100K chars
-    if len(risk_text) > 100000:
-        risk_text = risk_text[:100000] + "... [truncated]"
+    # No truncation in extraction — capture the full section.
+    # Truncation for LLM context happens at the prompt level.
 
     return risk_text

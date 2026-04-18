@@ -27,7 +27,7 @@ class WorkerNode:
 
     def __init__(self, directive: Directive, data_source, budget: float,
                  total_budget: float, parent_worker=None, lenses: list[str] = None,
-                 semaphore: asyncio.Semaphore = None):
+                 semaphore: asyncio.Semaphore = None, budget_pool=None):
         self.directive = directive
         self.data_source = data_source
         self.budget = budget          # my allocation
@@ -36,6 +36,7 @@ class WorkerNode:
         self.parent_worker = parent_worker
         self.lenses = lenses or []
         self._semaphore = semaphore or asyncio.Semaphore(3)
+        self._budget_pool = budget_pool  # shared pool — check before every LLM call
 
         self.node_id = directive.node_id
         self.pos = directive.tree_position
@@ -142,6 +143,7 @@ class WorkerNode:
                 parent_worker=self,
                 lenses=self.lenses,
                 semaphore=self._semaphore,
+                budget_pool=self._budget_pool,
             )
             self.child_workers.append(child)
 
@@ -270,11 +272,17 @@ class WorkerNode:
             force_resolve=force_resolve,
         )
 
+        # Budget gate: check shared pool before LLM call
+        if self._budget_pool and self._budget_pool.exploration_exhausted:
+            return None
+
         # LLM call with extended thinking
         async with self._semaphore:
             thinking, output, cost = await _call_llm(prompt)
 
         self.spent += cost
+        if self._budget_pool:
+            self._budget_pool.record("exploration", cost)
         self.thinking_log.append({"turn": "initial", "thinking": thinking})
 
         # Emit thinking
@@ -336,10 +344,16 @@ class WorkerNode:
             total_budget=self.budget,
         )
 
+        # Budget gate
+        if self._budget_pool and self._budget_pool.exploration_exhausted:
+            return None
+
         async with self._semaphore:
             thinking, output, cost = await _call_llm(prompt)
 
         self.spent += cost
+        if self._budget_pool:
+            self._budget_pool.record("exploration", cost)
         self.thinking_log.append({"turn": "review", "thinking": thinking})
 
         _emit_thinking_chunks(self.node_id, "review", thinking)
@@ -381,6 +395,7 @@ class WorkerNode:
                 parent_worker=self,
                 lenses=self.lenses,
                 semaphore=self._semaphore,
+                budget_pool=self._budget_pool,
             )
             self.child_workers.append(child)
 
