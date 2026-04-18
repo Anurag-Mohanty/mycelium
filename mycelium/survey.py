@@ -213,6 +213,31 @@ class AnalyticalSurvey:
                     anomaly_flags[idx].add("keywords")
         _progress("keywords")
 
+        # ── TECHNIQUE 9: Temporal Text Comparison ──
+        # Compare consecutive documents from the same entity over time.
+        # Flags: major rewrites, term removals, word count shifts.
+        group_col = self._find_group_col(df, cat_cols)
+        if text_col and group_col and date_cols:
+            temporal_text = self._temporal_text_comparison(df, text_col, group_col, date_cols[0])
+            for item in temporal_text.get("anomalies", []):
+                for idx in item.get("indices", []):
+                    anomaly_flags[idx].add("temporal_text")
+            results["anomalies_by_technique"]["temporal_text"] = temporal_text
+            results["techniques_applied"].append("temporal_text_comparison")
+        _progress("temporal_text")
+
+        # ── TECHNIQUE 10: Peer Divergence ──
+        # Within a peer group (same category), find records whose text diverges.
+        peer_col = self._find_peer_col(df, cat_cols)
+        if text_col and group_col and peer_col:
+            peer_div = self._peer_divergence(df, text_col, group_col, peer_col)
+            for item in peer_div.get("anomalies", []):
+                for idx in item.get("indices", []):
+                    anomaly_flags[idx].add("peer_divergence")
+            results["anomalies_by_technique"]["peer_divergence"] = peer_div
+            results["techniques_applied"].append("peer_divergence")
+        _progress("peer_divergence")
+
         # ── CONVERGENCE: Multi-flagged records ──
         multi_flagged = []
         for idx, techniques in anomaly_flags.items():
@@ -674,6 +699,245 @@ class AnalyticalSurvey:
             "anomalies": sorted(anomalies, key=lambda x: abs(x.get("ratio", 1) - 1), reverse=True)[:20],
             "flagged_indices": list(set(flagged)),
         }
+
+    # =================================================================
+    # Cluster builder (backwards compat)
+    # =================================================================
+
+    # =================================================================
+    # TECHNIQUE 9: Temporal Text Comparison
+    # =================================================================
+
+    def _find_group_col(self, df: pd.DataFrame, cat_cols: list) -> str | None:
+        """Find the best column to group records by entity (company, author, etc.)."""
+        # Prefer columns named company, author, publisher, maintainer
+        for name in ("company", "author", "publisher", "maintainer", "name"):
+            if name in df.columns:
+                n_unique = df[name].nunique()
+                if 2 <= n_unique <= len(df) * 0.5:
+                    return name
+        # Fall back to any cat col with reasonable cardinality
+        for col in cat_cols:
+            n_unique = df[col].nunique()
+            if 3 <= n_unique <= len(df) * 0.3:
+                return col
+        return None
+
+    def _find_peer_col(self, df: pd.DataFrame, cat_cols: list) -> str | None:
+        """Find the best column for peer grouping (industry, category, etc.)."""
+        for name in ("sic", "sic_description", "category", "industry", "sector", "search_term"):
+            if name in df.columns:
+                n_unique = df[name].nunique()
+                if 2 <= n_unique <= 50:
+                    return name
+        return None
+
+    def _temporal_text_comparison(self, df: pd.DataFrame, text_col: str,
+                                   group_col: str, date_col: str) -> dict:
+        """Compare consecutive documents from the same entity over time.
+
+        Flags: major rewrites (low cosine similarity), term removals,
+        word count shifts >30%.
+        """
+        from sklearn.metrics.pairwise import cosine_similarity
+
+        results = {"anomalies": [], "description": ""}
+
+        # Build TF-IDF across all documents
+        texts = df[text_col].fillna("").tolist()
+        try:
+            vectorizer = TfidfVectorizer(max_features=5000, stop_words="english",
+                                         ngram_range=(1, 2))
+            tfidf_matrix = vectorizer.fit_transform(texts)
+            feature_names = vectorizer.get_feature_names_out()
+        except Exception:
+            return results
+
+        # Group by entity, sort by date
+        groups = df.groupby(group_col)
+
+        for entity_name, group in groups:
+            if len(group) < 2:
+                continue
+
+            sorted_group = group.sort_values(date_col)
+            indices = sorted_group.index.tolist()
+
+            for k in range(1, len(indices)):
+                prev_idx = indices[k - 1]
+                curr_idx = indices[k]
+
+                prev_row = df.loc[prev_idx]
+                curr_row = df.loc[curr_idx]
+
+                # Cosine similarity between consecutive years
+                prev_vec = tfidf_matrix[df.index.get_loc(prev_idx)]
+                curr_vec = tfidf_matrix[df.index.get_loc(curr_idx)]
+                sim = float(cosine_similarity(prev_vec, curr_vec)[0][0])
+
+                prev_date = str(prev_row.get(date_col, "?"))[:10]
+                curr_date = str(curr_row.get(date_col, "?"))[:10]
+
+                # Major rewrite
+                if sim < 0.7:
+                    results["anomalies"].append({
+                        "type": "major_rewrite",
+                        "entity": str(entity_name),
+                        "from_date": prev_date,
+                        "to_date": curr_date,
+                        "cosine_similarity": round(sim, 3),
+                        "indices": [prev_idx, curr_idx],
+                        "description": (
+                            f"{entity_name}: major text rewrite between {prev_date} "
+                            f"and {curr_date} (cosine similarity {sim:.2f})"
+                        ),
+                    })
+
+                # Word count shift
+                prev_wc = len(str(prev_row.get(text_col, "")).split())
+                curr_wc = len(str(curr_row.get(text_col, "")).split())
+                if prev_wc > 100:
+                    change_pct = (curr_wc - prev_wc) / prev_wc * 100
+                    if abs(change_pct) > 30:
+                        results["anomalies"].append({
+                            "type": "word_count_shift",
+                            "entity": str(entity_name),
+                            "from_date": prev_date,
+                            "to_date": curr_date,
+                            "prev_words": prev_wc,
+                            "curr_words": curr_wc,
+                            "change_pct": round(change_pct, 1),
+                            "indices": [curr_idx],
+                            "description": (
+                                f"{entity_name}: word count {'grew' if change_pct > 0 else 'shrank'} "
+                                f"{abs(change_pct):.0f}% ({prev_wc:,} → {curr_wc:,}) "
+                                f"between {prev_date} and {curr_date}"
+                            ),
+                        })
+
+                # Terms that disappeared
+                prev_loc = df.index.get_loc(prev_idx)
+                curr_loc = df.index.get_loc(curr_idx)
+                prev_terms = set(feature_names[np.asarray(tfidf_matrix[prev_loc].todense()).flatten() > 0])
+                curr_terms = set(feature_names[np.asarray(tfidf_matrix[curr_loc].todense()).flatten() > 0])
+
+                disappeared = prev_terms - curr_terms
+                appeared = curr_terms - prev_terms
+
+                # Filter to significant terms (not just rare noise)
+                sig_disappeared = [t for t in disappeared if len(t) > 4][:10]
+                sig_appeared = [t for t in appeared if len(t) > 4][:10]
+
+                if len(sig_disappeared) > 3:
+                    results["anomalies"].append({
+                        "type": "terms_removed",
+                        "entity": str(entity_name),
+                        "from_date": prev_date,
+                        "to_date": curr_date,
+                        "removed_terms": sig_disappeared,
+                        "indices": [curr_idx],
+                        "description": (
+                            f"{entity_name}: removed {len(sig_disappeared)} terms between "
+                            f"{prev_date} and {curr_date}: {', '.join(sig_disappeared[:5])}"
+                        ),
+                    })
+
+        results["anomalies"].sort(key=lambda x: x.get("cosine_similarity", 1))
+        results["description"] = f"{len(results['anomalies'])} temporal text anomalies found"
+        return results
+
+    # =================================================================
+    # TECHNIQUE 10: Peer Divergence
+    # =================================================================
+
+    def _peer_divergence(self, df: pd.DataFrame, text_col: str,
+                          group_col: str, peer_col: str) -> dict:
+        """Find entities whose text diverges from peers in the same category.
+
+        If 4/5 semiconductor companies mention "export control" but one doesn't,
+        flag the outlier.
+        """
+        results = {"anomalies": [], "description": ""}
+
+        texts = df[text_col].fillna("").tolist()
+        try:
+            vectorizer = TfidfVectorizer(max_features=3000, stop_words="english",
+                                         ngram_range=(1, 2))
+            tfidf_matrix = vectorizer.fit_transform(texts)
+            feature_names = vectorizer.get_feature_names_out()
+        except Exception:
+            return results
+
+        # Get the latest record per entity (most recent filing)
+        latest = df.sort_values("year" if "year" in df.columns else group_col, ascending=False)
+        latest = latest.drop_duplicates(subset=[group_col], keep="first")
+
+        # Group by peer category
+        peer_groups = latest.groupby(peer_col)
+
+        for peer_name, peer_group in peer_groups:
+            if len(peer_group) < 3:
+                continue
+
+            peer_indices = [df.index.get_loc(idx) for idx in peer_group.index]
+
+            # For each significant term, check if any peer is missing it
+            for term_idx, term in enumerate(feature_names):
+                if len(term) < 5:
+                    continue
+
+                usage = [tfidf_matrix[pi, term_idx] > 0 for pi in peer_indices]
+                usage_pct = sum(usage) / len(usage)
+
+                # Term used by 80%+ of peers — flag the outliers
+                if usage_pct >= 0.8 and sum(usage) < len(usage):
+                    outliers = [
+                        str(peer_group.iloc[i][group_col])
+                        for i, used in enumerate(usage) if not used
+                    ]
+                    if outliers:
+                        results["anomalies"].append({
+                            "type": "peer_term_absence",
+                            "term": term,
+                            "peer_group": str(peer_name),
+                            "usage_pct": round(usage_pct * 100, 0),
+                            "outliers": outliers,
+                            "indices": [peer_group.index[i] for i, used in enumerate(usage) if not used],
+                            "description": (
+                                f"Term '{term}' used by {usage_pct * 100:.0f}% of {peer_name} peers "
+                                f"but ABSENT from: {', '.join(outliers)}"
+                            ),
+                        })
+
+                # Term unique to one entity — no peers use it
+                if 0 < sum(usage) <= 1 and len(usage) >= 4:
+                    unique_users = [
+                        str(peer_group.iloc[i][group_col])
+                        for i, used in enumerate(usage) if used
+                    ]
+                    results["anomalies"].append({
+                        "type": "unique_risk_term",
+                        "term": term,
+                        "peer_group": str(peer_name),
+                        "unique_to": unique_users,
+                        "indices": [peer_group.index[i] for i, used in enumerate(usage) if used],
+                        "description": (
+                            f"Only {', '.join(unique_users)} mentions '{term}' — "
+                            f"no other {peer_name} peer uses this term"
+                        ),
+                    })
+
+        # Deduplicate and limit
+        seen = set()
+        unique = []
+        for a in results["anomalies"]:
+            key = (a["type"], a.get("term", ""), tuple(a.get("outliers", a.get("unique_to", []))))
+            if key not in seen:
+                seen.add(key)
+                unique.append(a)
+        results["anomalies"] = unique[:50]
+        results["description"] = f"{len(results['anomalies'])} peer divergence anomalies found"
+        return results
 
     # =================================================================
     # Cluster builder (backwards compat)

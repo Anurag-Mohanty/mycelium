@@ -211,18 +211,77 @@ class SecEdgarSource(DataSource):
                     "risk_factors_word_count": len(risk_factors.split()) if risk_factors else 0,
                 }
 
-                # Build an abstract for the LLM
-                rf_preview = (risk_factors[:1000] + "...") if risk_factors and len(risk_factors) > 1000 else (risk_factors or "No risk factors extracted")
-                record["abstract"] = (
-                    f"SEC 10-K Annual Report — {actual_name} (CIK {cik})\n"
-                    f"Filed: {dates[j]} | Industry: {sic_desc} (SIC {sic})\n"
-                    f"Risk factors: {record['risk_factors_word_count']:,} words\n\n"
-                    f"Risk Factors Preview:\n{rf_preview}"
-                )
+                # Build abstract with comparative context
+                rf_preview = (risk_factors[:3000] + "...") if risk_factors and len(risk_factors) > 3000 else (risk_factors or "No risk factors extracted")
+
+                abstract_parts = [
+                    f"SEC 10-K Annual Report — {actual_name} (CIK {cik})",
+                    f"Filed: {dates[j]} | Industry: {sic_desc} (SIC {sic})",
+                    f"Risk factors: {record['risk_factors_word_count']:,} words",
+                ]
+
+                # Add previous year context if available from enriched data
+                prev_context = self._get_previous_year_context(actual_name, year)
+                if prev_context:
+                    abstract_parts.append(f"\nPREVIOUS YEAR COMPARISON ({year-1}):")
+                    abstract_parts.append(prev_context)
+
+                # Add peer context if available
+                peer_context = self._get_peer_context(sic, actual_name, year)
+                if peer_context:
+                    abstract_parts.append(f"\nPEER GROUP ({sic_desc}):")
+                    abstract_parts.append(peer_context)
+
+                abstract_parts.append(f"\nRisk Factors Text:\n{rf_preview}")
+                record["abstract"] = "\n".join(abstract_parts)
 
                 results.append(record)
 
         return results
+
+    def _get_previous_year_context(self, company: str, year: int) -> str | None:
+        """Get summary of previous year's risk factors for temporal comparison."""
+        if not hasattr(self, '_enriched_filings') or not self._enriched_filings:
+            return None
+
+        prev = [f for f in self._enriched_filings
+                if f.get("company") == company and f.get("year") == year - 1]
+        if not prev:
+            return None
+
+        p = prev[0]
+        prev_wc = p.get("risk_factors_word_count", 0)
+        curr_wc_approx = None  # we don't have current yet at this point in the loop
+
+        lines = [f"  Previous year word count: {prev_wc:,}"]
+
+        # Show first 1000 chars of previous risk factors for comparison
+        prev_rf = p.get("risk_factors_text", "")
+        if prev_rf:
+            lines.append(f"  Previous year preview: {prev_rf[:1000]}...")
+
+        return "\n".join(lines)
+
+    def _get_peer_context(self, sic: str, company: str, year: int) -> str | None:
+        """Get peer group summary for cross-company comparison."""
+        if not hasattr(self, '_enriched_filings') or not self._enriched_filings:
+            return None
+
+        # Find peers: same SIC code, same year, different company
+        peers = [f for f in self._enriched_filings
+                 if f.get("sic") == sic and f.get("year") == year
+                 and f.get("company") != company]
+
+        if not peers:
+            return None
+
+        lines = []
+        for p in peers[:5]:
+            wc = p.get("risk_factors_word_count", 0)
+            name = p.get("company", "?")
+            lines.append(f"  {name}: {wc:,} words")
+
+        return "\n".join(lines) if lines else None
 
     def _find_cik(self, company_name: str) -> str | None:
         """Find CIK from cached index by company name (fuzzy match)."""
@@ -281,7 +340,112 @@ class SecEdgarSource(DataSource):
                 break
 
         self._index_cache = all_filings
+
+        # Phase 2: Enrich top companies with actual risk factor content
+        if progress_callback:
+            progress_callback({"phase": "enriching_content", "fetched": len(all_filings),
+                               "total_estimated": max_records})
+
+        enriched = await self._enrich_top_companies(all_filings, progress_callback)
+        if enriched:
+            # Store enriched data for comparative context during exploration
+            self._enriched_filings = enriched
+            return enriched
+
         return all_filings[:max_records]
+
+    async def _enrich_top_companies(self, all_filings: list[dict],
+                                     progress_callback=None) -> list[dict]:
+        """Enrich top 50 companies with actual risk factor content.
+
+        Picks the 50 companies with the most 10-K filings across the index,
+        fetches their actual filing documents, extracts risk factors.
+        Returns enriched records suitable for text-level analytical survey.
+        """
+        from collections import Counter
+
+        # Find top 50 companies by filing count
+        company_counts = Counter(f.get("company", "") for f in all_filings if f.get("company"))
+        top_companies = [name for name, _ in company_counts.most_common(50)]
+
+        print(f"  [CATALOG] Enriching {len(top_companies)} companies with risk factor content...")
+
+        enriched = []
+        total = len(top_companies)
+
+        for i, company_name in enumerate(top_companies):
+            cik = self._find_cik(company_name)
+            if not cik:
+                continue
+
+            submissions = await self._get_submissions(cik)
+            if not submissions:
+                continue
+
+            actual_name = submissions.get("name", company_name)
+            sic = submissions.get("sic", "")
+            sic_desc = submissions.get("sicDescription", "")
+
+            recent = submissions.get("filings", {}).get("recent", {})
+            forms = recent.get("form", [])
+            dates = recent.get("filingDate", [])
+            accessions = recent.get("accessionNumber", [])
+            primary_docs = recent.get("primaryDocument", [])
+
+            for j, form in enumerate(forms):
+                if form != "10-K" or j >= len(dates):
+                    continue
+                year = int(dates[j][:4]) if dates[j] else 0
+                if year < 2021:
+                    continue
+
+                accession = accessions[j] if j < len(accessions) else ""
+                primary_doc = primary_docs[j] if j < len(primary_docs) else ""
+                if not accession or not primary_doc:
+                    continue
+
+                # Fetch and extract
+                accession_path = accession.replace("-", "")
+                doc_url = (f"{SEC_BASE}/Archives/edgar/data/{cik}/"
+                           f"{accession_path}/{primary_doc}")
+                resp = await self._get(doc_url)
+                if not resp:
+                    continue
+
+                risk_factors = _extract_risk_factors(resp.text)
+                if not risk_factors:
+                    continue
+
+                enriched.append({
+                    "id": f"{cik}/{accession}",
+                    "title": f"{actual_name} — 10-K ({dates[j]})",
+                    "type": "sec_filing",
+                    "company": actual_name,
+                    "cik": cik,
+                    "sic": sic,
+                    "sic_description": sic_desc,
+                    "form_type": "10-K",
+                    "date": dates[j],
+                    "year": year,
+                    "accession": accession,
+                    "url": doc_url,
+                    "risk_factors_text": risk_factors,
+                    "risk_factors_length": len(risk_factors),
+                    "risk_factors_word_count": len(risk_factors.split()),
+                })
+
+            if progress_callback:
+                progress_callback({
+                    "fetched": len(enriched),
+                    "total_estimated": total * 3,  # ~3 filings per company
+                    "phase": "enriching_content",
+                })
+
+            if (i + 1) % 10 == 0:
+                print(f"  [CATALOG] Enriched {i + 1}/{total} companies, {len(enriched)} filings")
+
+        print(f"  [CATALOG] Content enrichment complete: {len(enriched)} filings with risk factors")
+        return enriched
 
     async def close(self):
         await self.client.aclose()
