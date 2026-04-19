@@ -253,55 +253,60 @@ hypotheses. Each should:
 - Describe what would confirm or deny it
 - Note which attention lenses it relates to
 
-STEP 4 — ASSESS
-This is the critical decision point. You are a manager deciding how to deploy \
-your team, not a solo analyst trying to do everything yourself.
+STEP 4 — ASSESS YOUR COVERAGE
 
-THE COVERAGE QUESTION: Can you personally do justice to all {doc_count} items? \
-A single analyst examining 80+ items will miss patterns that a team of 3-4 \
-specialists would catch. If your scope spans genuinely different sub-domains \
-(different authors, different purposes, different ecosystems), decompose. \
-Your observations from this level plus your children's deeper analysis is \
-strictly better than your observations alone.
+You just analyzed the data in your scope. Now honestly assess: did you do it justice?
 
-YOU CAN DO BOTH: Produce observations from what you see at this level AND \
-spawn children to go deeper. Your initial observations set the context. Your \
-children trace the threads. This is almost always the right move when you have \
-budget and diverse data.
+Ask yourself:
+- Did I investigate every anomaly target I was given, or did I skip some because \
+the scope was too large?
+- Are there specific threads in my analysis that deserve dedicated follow-up — \
+a specific entity, a specific pattern, a specific contradiction — that I could \
+only scratch the surface of?
+- If I had to present my analysis to an expert, would they say "you covered this \
+thoroughly" or "you glossed over the interesting parts"?
 
-WHEN TO RESOLVE (analyze directly, no children):
-- Your scope is focused on a single topic, entity, or narrow category
-- Your parent gave you a specific hypothesis to test — TEST IT directly
-- You have few items (under 20) that all cover the same domain
-- Your budget is nearly exhausted
+Based on your honest assessment:
 
-ANTI-SPIN CHECKS (violations waste budget):
-- NEVER spawn exactly one child — that's passing the buck, not delegating
-- NEVER create children whose scope is just a slightly narrower version of yours \
-(that's a chain, not a tree)
-- Each child must examine DIFFERENT content and find DIFFERENT things
-- If all children would find the same patterns, resolve instead
+IF you covered everything substantively and no threads need deeper investigation \
+→ resolve. Report your evidence packets.
+
+IF specific threads emerged that need dedicated deeper work → create children for \
+THOSE SPECIFIC threads. Each child gets the specific evidence that warrants \
+follow-up, not a broad topic slice.
+
+IF your scope contains genuinely distinct sub-domains that cannot be analyzed \
+together (different entity types, different time periods, different data \
+structures) → decompose into those distinct areas.
+
+Never create a single child. If you can't identify at least 2 distinct threads, \
+resolve directly.
 
 --- WHEN RESOLVING ---
 
-Read the details carefully. Your observations should cite SPECIFIC DATA — not just \
-names or titles, but actual content, numbers, relationships, versions, dates, and \
-anomalies you found in the records. An observation that says "Package X is popular" \
-is worthless. An observation that says "Package X has 5M weekly downloads but only \
-1 maintainer who last published 18 months ago" is valuable.
+For each investigation target and anything else you notice, produce an EVIDENCE \
+PACKET — structured data, not prose. Every packet must contain:
+- The SPECIFIC data point(s) from the records (actual values, not summaries)
+- WHY the math flagged it (which techniques, what scores)
+- A SPECIFIC hypothesis about why this anomaly exists
+- What you would EXPECT to see vs what you actually found
 
-Look for:
-- Specific data points, definitions, or configurations
-- Relationships and dependencies between items
-- Concentrations, imbalances, or single points of failure
-- Temporal patterns (gaps, bursts, staleness)
-- Inconsistencies between declared and actual state
+An evidence packet that says "Company X shows supply chain concerns consistent \
+with industry trends" is WORTHLESS — it could be written without reading the data. \
+An evidence packet that says "Company X added 'PFAS liability' and 'forever \
+chemicals' to risk factors in 2023 (absent in 2022), expanding from 12,400 to \
+31,200 words — flagged by temporal_text_comparison with 0.34 cosine similarity" \
+is VALUABLE — it cites specific data the math flagged.
+
+If your observation could be written without looking at the data — if it's \
+something you already know about this domain from training — it is NOT a finding. \
+Skip it.
 
 --- WHEN DECOMPOSING ---
 
-Divide by whatever dimension makes the most sense for the material — topic, \
-category, author, relationship type, time period, or any other natural boundary. \
-Always create at least 2 children. Each child should see DIFFERENT content.
+Create a child ONLY for a specific thread that needs dedicated investigation. \
+Provide the child with the exact evidence that triggered the need for deeper work. \
+Always create at least 2 children. Each child should investigate DIFFERENT evidence.
 
 STEP 5 — OUTPUT
 
@@ -310,7 +315,9 @@ Produce a JSON object with this exact structure:
     "survey": "your inventory of what's in scope",
     "observations": [
         {{
-            "what_i_saw": "specific finding — cite actual data, not just names",
+            "raw_evidence": "THE SPECIFIC DATA — actual values, numbers, text from the records. Not a summary.",
+            "statistical_grounding": "which survey techniques flagged this and why (z-score, cosine similarity, isolation forest score, etc.). If not from survey, say 'discovered during investigation'",
+            "local_hypothesis": "a SPECIFIC, non-generic explanation of why this anomaly exists",
             "source": {{
                 "doc_id": "unique identifier (package name, document number, etc.)",
                 "title": "name or title of the item",
@@ -320,21 +327,18 @@ Produce a JSON object with this exact structure:
                 "url": "URL to the source"
             }},
             "observation_type": "definition | pattern | anomaly | absence | temporal_shift | concentration | contradiction_signal | dependency_risk | single_point_of_failure",
-            "preliminary_relevance": {{
-                "lens_name": 0.0
-            }},
-            "reasoning": "why this matters — reference specific data from the items",
-            "potential_connections": ["keyword1", "keyword2"]
+            "confidence": 0.85,
+            "surprising_because": "what you would EXPECT to see and how this differs"
         }}
     ],
     "child_directives": [
         {{
-            "scope_description": "what this child should explore and why",
+            "scope_description": "what this child should investigate and the SPECIFIC evidence that triggered it",
             "filters": {{
                 "keyword": "search term or category",
                 "packages": ["specific_item_1", "specific_item_2"]
             }},
-            "parent_context": "what you noticed that motivated this child — include specific evidence",
+            "parent_context": "the exact evidence packet that motivated this child",
             "hypothesis": "what you suspect the child will find"
         }}
     ],
@@ -344,13 +348,15 @@ Produce a JSON object with this exact structure:
 }}
 
 INTEGRITY RULES:
-- Every observation MUST cite a specific item with its identifier. If you can't \
+- Every observation MUST cite specific data with its identifier. If you can't \
 point to a source, put it in "unresolved" instead.
-- Observations must reference actual DATA — numbers, content, relationships — \
-not just names or titles.
+- raw_evidence must contain ACTUAL VALUES from the records — numbers, text, dates — \
+not descriptions or summaries of what the data "shows."
+- If your observation is something you already knew before reading this data, \
+it is NOT a finding. Skip it entirely.
 - Don't invent connections. If something MIGHT be related but you can't verify, \
 say so with low confidence.
-- If you find something surprising and unrelated to any lens, REPORT IT.
+- If you find something surprising and unrelated to any investigation target, REPORT IT.
 - NEVER spawn exactly one child. Either resolve or create 2+.
 
 Respond ONLY with valid JSON, no other text.
