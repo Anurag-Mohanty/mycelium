@@ -360,9 +360,10 @@ class Orchestrator:
         # Workers record spending directly to the budget pool now.
         # No post-hoc recording needed.
 
-        # Collect stats and populate all_node_results from worker tree
+        # Collect stats, diagnostics, and populate all_node_results from worker tree
         self._collect_worker_stats(segment_workers)
         self._collect_worker_node_results(segment_workers)
+        self._write_diagnostics(segment_workers)
 
         # Root-level synthesis across all segments
         if len(segment_results) > 1 and self.budget.can_spend():
@@ -995,6 +996,78 @@ Respond ONLY with a JSON array."""}],
 
         for w in workers:
             _save(w)
+
+    def _write_diagnostics(self, workers: list):
+        """Write per-node diagnostic logs and print summary."""
+        diag_dir = self.run_dir / "diagnostics"
+        diag_dir.mkdir(exist_ok=True)
+
+        all_diags = []
+
+        def _collect(worker):
+            diag = worker._build_diagnostic()
+            all_diags.append(diag)
+            # Write individual diagnostic file
+            diag_file = diag_dir / f"{worker.node_id[:8]}.json"
+            with open(diag_file, "w") as f:
+                json.dump(diag, f, indent=2, default=str)
+            for child in worker.child_workers:
+                _collect(child)
+
+        for w in workers:
+            _collect(w)
+
+        if not all_diags:
+            return
+
+        # Compute summary stats
+        total = len(all_diags)
+        zero_obs = sum(1 for d in all_diags if d["output"]["observations_count"] == 0)
+        with_targets = sum(1 for d in all_diags if d["anomaly_targets_received"]["count"] > 0)
+        targets_with_evidence = sum(
+            1 for d in all_diags
+            if any(t.get("has_evidence") for t in d["anomaly_targets_received"].get("targets", []))
+        )
+        decomposed = sum(1 for d in all_diags if d["decision"] == "decomposed")
+        gaps_flagged = sum(
+            1 for d in all_diags
+            if not d["self_evaluation"].get("purpose_addressed", True)
+        )
+        evidence_cited = sum(d["output"].get("evidence_cited", 0) for d in all_diags)
+        total_obs = sum(d["output"]["observations_count"] for d in all_diags)
+
+        # Find best and worst nodes
+        best = max(all_diags, key=lambda d: d["output"]["observations_count"])
+        worst = [d for d in all_diags if d["output"]["observations_count"] == 0]
+
+        print(f"\n  {'═'*54}")
+        print(f"  NODE DIAGNOSTIC SUMMARY")
+        print(f"  {'─'*54}")
+        print(f"  Total nodes: {total}")
+        print(f"  Nodes with 0 observations: {zero_obs} ({zero_obs*100//max(1,total)}%)")
+        print(f"  Nodes that received anomaly targets: {with_targets} ({with_targets*100//max(1,total)}%)")
+        print(f"  Nodes whose targets included evidence: {targets_with_evidence} ({targets_with_evidence*100//max(1,total)}%)")
+        print(f"  Nodes that decomposed: {decomposed} ({decomposed*100//max(1,total)}%)")
+        print(f"  Nodes where self-eval flagged gaps: {gaps_flagged} ({gaps_flagged*100//max(1,total)}%)")
+        print(f"  Observations citing evidence: {evidence_cited}/{total_obs}")
+        print(f"  {'─'*54}")
+        print(f"  SAMPLE NODE (highest obs count = {best['output']['observations_count']}):")
+        print(f"    Position: {best['tree_position']}")
+        print(f"    Purpose: {best['purpose'][:100]}")
+        print(f"    Data: {best['data_received'].get('record_count', 0)} records")
+        print(f"    Targets: {best['anomaly_targets_received']['count']} anomalies")
+        print(f"    Decision: {best['decision']}")
+        if best["output"].get("sample_observation"):
+            sample = best["output"]["sample_observation"]
+            print(f"    Sample obs: {str(sample.get('raw_evidence', ''))[:150]}")
+        if worst:
+            w = worst[0]
+            print(f"  SAMPLE NODE (0 observations):")
+            print(f"    Position: {w['tree_position']}")
+            print(f"    Purpose: {w['purpose'][:100]}")
+            print(f"    Data: {w['data_received'].get('record_count', 0)} records")
+            print(f"    Targets: {w['anomaly_targets_received']['count']} anomalies")
+        print(f"  {'═'*54}")
 
     def _worker_result_to_node_result(self, result: dict) -> NodeResult:
         """Convert a WorkerNode result dict to a NodeResult for synthesis."""

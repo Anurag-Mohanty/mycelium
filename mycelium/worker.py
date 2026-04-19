@@ -49,6 +49,7 @@ class WorkerNode:
         self.thinking_log = []        # all thinking blocks across turns
         self.metrics = {}             # purpose_addressed, evidence_quality, budget_efficiency
         self.status = "created"
+        self._diagnostics = {}        # raw data for diagnostic log
 
     @property
     def surplus(self) -> float:
@@ -259,6 +260,31 @@ class WorkerNode:
         # Build anomaly context from survey data
         anomaly_ctx = _format_anomalies(self.directive.survey_anomalies, documents)
 
+        # Store diagnostic data
+        self._diagnostics["data_received"] = {
+            "record_count": len(documents),
+            "fields_present": list(documents[0].keys()) if documents else [],
+            "avg_text_length": int(sum(
+                len(str(d.get("risk_factors_text", d.get("description", ""))))
+                for d in documents
+            ) / max(1, len(documents))),
+            "sample_record_summary": str(documents[0])[:100] if documents else "",
+        }
+        # Parse anomaly targets that were actually sent to the agent
+        raw_anomalies = self.directive.survey_anomalies or []
+        self._diagnostics["anomaly_targets_received"] = {
+            "count": len(raw_anomalies),
+            "targets": [
+                {
+                    "type": a.get("type", "?"),
+                    "description": str(a.get("description", ""))[:200],
+                    "has_evidence": bool(a.get("evidence")),
+                    "evidence_keys": list(a.get("evidence", {}).keys()) if isinstance(a.get("evidence"), dict) else [],
+                }
+                for a in raw_anomalies[:10]
+            ],
+        }
+
         purpose = self.directive.purpose or "Investigate the data in your scope and report what you find."
 
         prompt = NODE_REASONING_PROMPT.format(
@@ -443,6 +469,62 @@ class WorkerNode:
         """Rough estimate of total pipeline spend (for budget_update events)."""
         return self.spent + sum(c.spent for c in self.child_workers)
 
+    def _build_diagnostic(self) -> dict:
+        """Build the diagnostic log object from current node state."""
+        # Classify observations
+        obs_with_evidence = 0
+        obs_generic = 0
+        for obs in self.observations:
+            raw = obs.get("raw_evidence", "")
+            # Heuristic: if it contains numbers or quotes specific values, it's evidence-cited
+            has_numbers = any(c.isdigit() for c in raw)
+            if has_numbers and len(raw) > 50:
+                obs_with_evidence += 1
+            else:
+                obs_generic += 1
+
+        # Extract ASSESS reasoning from thinking
+        assess_reasoning = ""
+        if self.thinking_log:
+            thinking = self.thinking_log[0].get("thinking", "")
+            # Look for STEP 4 / ASSESS section
+            for marker in ["STEP 4", "ASSESS", "coverage"]:
+                idx = thinking.lower().find(marker.lower())
+                if idx >= 0:
+                    assess_reasoning = thinking[idx:idx + 300]
+                    break
+
+        self_eval = self.metrics or {}
+
+        return {
+            "node_id": self.node_id,
+            "tree_position": self.pos,
+            "scope": self.directive.scope.description[:200],
+            "purpose": (self.directive.purpose or "")[:200],
+            "data_received": self._diagnostics.get("data_received", {}),
+            "anomaly_targets_received": self._diagnostics.get("anomaly_targets_received", {}),
+            "thinking_summary": self.thinking_log[0]["thinking"][:500] if self.thinking_log else "",
+            "output": {
+                "observations_count": len(self.observations),
+                "children_spawned": len(self.child_workers),
+                "evidence_cited": obs_with_evidence,
+                "generic_description": obs_generic,
+                "sample_observation": self.observations[0] if self.observations else None,
+            },
+            "self_evaluation": {
+                "purpose_addressed": self_eval.get("purpose_addressed", None),
+                "evidence_quality": self_eval.get("evidence_quality", None),
+                "purpose_gap": self_eval.get("purpose_gap", ""),
+            },
+            "budget": {
+                "allocated": round(self.budget, 3),
+                "spent": round(self.spent, 3),
+                "returned": round(self.surplus, 3),
+            },
+            "decision": "decomposed" if self.child_workers else "resolved",
+            "decision_reasoning": assess_reasoning[:300],
+        }
+
     def _result(self) -> dict:
         """Package results for parent or orchestrator."""
         # Compute budget efficiency
@@ -464,6 +546,7 @@ class WorkerNode:
             "child_results": self.child_results,
             "status": self.status,
             "metrics": self.metrics,
+            "diagnostic": self._build_diagnostic(),
         }
 
 
