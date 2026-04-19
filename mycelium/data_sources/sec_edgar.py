@@ -356,24 +356,23 @@ class SecEdgarSource(DataSource):
 
     async def _enrich_top_companies(self, all_filings: list[dict],
                                      progress_callback=None) -> list[dict]:
-        """Enrich top 50 companies with actual risk factor content.
+        """Enrich ALL operating companies with actual risk factor content.
 
-        Picks the 50 companies with the most 10-K filings across the index,
-        fetches their actual filing documents, extracts risk factors.
-        Returns enriched records suitable for text-level analytical survey.
+        Fetches the actual 10-K document for every filing in the index,
+        extracts risk factors. Skips SPV/trust/asset-backed entities
+        (identical boilerplate). Caps at 5 filings per company (more adds
+        no analytical value). At 10 req/sec, ~5,500 filings takes ~9 min.
         """
-        from collections import Counter
+        import time as _time
 
-        # Pick 50 companies with the most INTERESTING filing patterns.
-        # Score by variance in filing metadata — companies whose filings
-        # CHANGE across years are more analytically interesting than those
-        # with identical boilerplate every year.
         skip_patterns = ("trust", "receivabl", "mortgage", "asset-backed",
                          "acquisition corp", "certificate", "funding",
                          "auto assets", "auto receivables", "llc series",
                          "depositor", "issuing entity")
 
-        # Group filings by company
+        max_filings_per_company = 5
+
+        # Group filings by company, filter SPVs, cap per company
         company_filings = {}
         for f in all_filings:
             name = f.get("company", "")
@@ -381,105 +380,166 @@ class SecEdgarSource(DataSource):
                 continue
             if name not in company_filings:
                 company_filings[name] = []
-            company_filings[name].append(f)
+            if len(company_filings[name]) < max_filings_per_company:
+                company_filings[name].append(f)
 
-        # Score each company by variance: number of filings * date spread
-        # Companies with multi-year coverage across different periods score highest
-        company_scores = {}
+        # Flatten to a list of filings to enrich
+        filings_to_enrich = []
         for name, filings in company_filings.items():
-            if len(filings) < 2:
-                continue
-            years = sorted(set(f.get("year", 0) for f in filings))
-            year_spread = (max(years) - min(years)) if len(years) > 1 else 0
-            # Score by year spread primarily — a company with 5 years of data
-            # is more interesting than one with 10 filings in 1 year
-            company_scores[name] = (year_spread + 1) * min(len(filings), 5)
+            filings_to_enrich.extend(filings)
 
-        top_companies = sorted(company_scores, key=company_scores.get, reverse=True)[:50]
-
-        print(f"  [CATALOG] Enriching {len(top_companies)} companies with risk factor content...")
+        total = len(filings_to_enrich)
+        total_companies = len(company_filings)
+        print(f"  [CATALOG] Enriching {total} filings from {total_companies} companies "
+              f"(max {max_filings_per_company}/company, SPVs filtered)...")
 
         enriched = []
-        total = len(top_companies)
+        extraction_attempts = 0
+        extraction_successes = 0
+        enrich_start = _time.time()
 
-        for i, company_name in enumerate(top_companies):
-            cik = self._find_cik(company_name)
-            if not cik:
-                continue
+        # First, get submissions (SIC codes) for all unique CIKs
+        # This is needed for SIC data — batch by unique CIK
+        cik_metadata = {}  # cik -> {name, sic, sic_desc}
+        unique_ciks = set()
+        for f in filings_to_enrich:
+            cik = f.get("cik", "")
+            if cik:
+                unique_ciks.add(cik)
 
+        print(f"  [CATALOG] Fetching metadata for {len(unique_ciks)} unique companies...")
+        for i, cik in enumerate(unique_ciks):
             submissions = await self._get_submissions(cik)
-            if not submissions:
-                continue
+            if submissions:
+                cik_metadata[cik] = {
+                    "name": submissions.get("name", ""),
+                    "sic": submissions.get("sic", ""),
+                    "sic_description": submissions.get("sicDescription", ""),
+                    "_submissions": submissions,  # keep full data for primary doc lookup
+                }
+            if (i + 1) % 200 == 0:
+                elapsed = _time.time() - enrich_start
+                print(f"  [CATALOG] Metadata: {i + 1}/{len(unique_ciks)} companies ({elapsed:.0f}s)")
 
-            actual_name = submissions.get("name", company_name)
-            sic = submissions.get("sic", "")
-            sic_desc = submissions.get("sicDescription", "")
-
-            recent = submissions.get("filings", {}).get("recent", {})
-            forms = recent.get("form", [])
-            dates = recent.get("filingDate", [])
+        # Build a map of CIK -> {accession -> primaryDocument} from submissions
+        # This avoids a separate index-page request per filing
+        cik_primary_docs = {}  # cik -> {accession -> primary_doc_filename}
+        for cik, meta in cik_metadata.items():
+            cik_primary_docs[cik] = {}
+        for cik in unique_ciks:
+            subs = cik_metadata.get(cik, {}).get("_submissions", {})
+            recent = subs.get("filings", {}).get("recent", {})
             accessions = recent.get("accessionNumber", [])
             primary_docs = recent.get("primaryDocument", [])
+            mapping = {}
+            for j in range(min(len(accessions), len(primary_docs))):
+                if accessions[j] and primary_docs[j]:
+                    mapping[accessions[j]] = primary_docs[j]
+            cik_primary_docs[cik] = mapping
 
-            filings_for_company = 0
-            max_filings_per_company = 5
+        print(f"  [CATALOG] Fetching filing documents...")
 
-            for j, form in enumerate(forms):
-                if form != "10-K" or j >= len(dates):
-                    continue
-                year = int(dates[j][:4]) if dates[j] else 0
-                if year < 2021:
-                    continue
-                if filings_for_company >= max_filings_per_company:
-                    break
+        for i, filing in enumerate(filings_to_enrich):
+            cik = filing.get("cik", "")
+            accession = filing.get("accession", "")
+            company_name = filing.get("company", "")
+            date_filed = filing.get("date", "")
+            year = filing.get("year", 0)
 
-                accession = accessions[j] if j < len(accessions) else ""
-                primary_doc = primary_docs[j] if j < len(primary_docs) else ""
-                if not accession or not primary_doc:
-                    continue
+            if not cik or not accession:
+                continue
 
-                # Fetch and extract
+            # Look up primary document from submissions data
+            primary_doc = cik_primary_docs.get(cik, {}).get(accession, "")
+
+            if primary_doc:
+                # Direct fetch — no index page needed
                 accession_path = accession.replace("-", "")
                 doc_url = (f"{SEC_BASE}/Archives/edgar/data/{cik}/"
                            f"{accession_path}/{primary_doc}")
-                resp = await self._get(doc_url)
+            else:
+                # Fallback: fetch the index page to find primary document
+                accession_path = accession.replace("-", "")
+                index_url = f"{SEC_BASE}/Archives/edgar/data/{cik}/{accession_path}/{accession}-index.htm"
+                resp = await self._get(index_url)
                 if not resp:
+                    extraction_attempts += 1
                     continue
 
-                risk_factors = _extract_risk_factors(resp.text)
-                if not risk_factors:
+                import re as _re
+                doc_links = _re.findall(r'href="([^"]*\.htm[l]?)"', resp.text)
+                primary_doc = None
+                for link in doc_links:
+                    if '-index' in link or 'R1.htm' in link:
+                        continue
+                    if any(m in link.lower() for m in ('10-k', '10k', 'annual')):
+                        primary_doc = link
+                        break
+                if not primary_doc:
+                    for link in doc_links:
+                        if '-index' not in link and link.endswith(('.htm', '.html')):
+                            primary_doc = link
+                            break
+                if not primary_doc:
+                    extraction_attempts += 1
                     continue
 
-                enriched.append({
-                    "id": f"{cik}/{accession}",
-                    "title": f"{actual_name} — 10-K ({dates[j]})",
-                    "type": "sec_filing",
-                    "company": actual_name,
-                    "cik": cik,
-                    "sic": sic,
-                    "sic_description": sic_desc,
-                    "form_type": "10-K",
-                    "date": dates[j],
-                    "year": year,
-                    "accession": accession,
-                    "url": doc_url,
-                    "risk_factors_text": risk_factors,
-                    "risk_factors_length": len(risk_factors),
-                    "risk_factors_word_count": len(risk_factors.split()),
-                })
-                filings_for_company += 1
+                if primary_doc.startswith('/'):
+                    doc_url = f"{SEC_BASE}{primary_doc}"
+                else:
+                    doc_url = f"{SEC_BASE}/Archives/edgar/data/{cik}/{accession_path}/{primary_doc}"
+
+            resp = await self._get(doc_url)
+            extraction_attempts += 1
+            if not resp:
+                continue
+
+            risk_factors = _extract_risk_factors(resp.text)
+            if not risk_factors:
+                continue
+
+            extraction_successes += 1
+            meta = cik_metadata.get(cik, {})
+            enriched.append({
+                "id": f"{cik}/{accession}",
+                "title": f"{meta.get('name', company_name)} — 10-K ({date_filed})",
+                "type": "sec_filing",
+                "company": meta.get("name", company_name),
+                "cik": cik,
+                "sic": meta.get("sic", ""),
+                "sic_description": meta.get("sic_description", ""),
+                "form_type": "10-K",
+                "date": date_filed,
+                "year": year,
+                "accession": accession,
+                "url": doc_url,
+                "risk_factors_text": risk_factors,
+                "risk_factors_length": len(risk_factors),
+                "risk_factors_word_count": len(risk_factors.split()),
+            })
 
             if progress_callback:
                 progress_callback({
                     "fetched": len(enriched),
-                    "total_estimated": total * 3,  # ~3 filings per company
+                    "total_estimated": total,
                     "phase": "enriching_content",
                 })
 
-            if (i + 1) % 10 == 0:
-                print(f"  [CATALOG] Enriched {i + 1}/{total} companies, {len(enriched)} filings")
+            if (i + 1) % 100 == 0:
+                elapsed = _time.time() - enrich_start
+                rate = (i + 1) / elapsed if elapsed > 0 else 0
+                eta = (total - i - 1) / rate / 60 if rate > 0 else 0
+                success_pct = extraction_successes / max(1, extraction_attempts) * 100
+                print(f"  [CATALOG] {i + 1}/{total} filings, "
+                      f"{len(enriched)} enriched ({success_pct:.0f}% extraction), "
+                      f"{elapsed:.0f}s elapsed, ~{eta:.1f}min remaining")
 
-        print(f"  [CATALOG] Content enrichment complete: {len(enriched)} filings with risk factors")
+        elapsed = _time.time() - enrich_start
+        success_pct = extraction_successes / max(1, extraction_attempts) * 100
+        companies_enriched = len(set(r["company"] for r in enriched))
+        print(f"  [CATALOG] Enriched {len(enriched)} filings from {companies_enriched} companies. "
+              f"Enrichment time: {elapsed / 60:.1f} minutes. "
+              f"Extraction success rate: {success_pct:.0f}%.")
         return enriched
 
     async def close(self):
