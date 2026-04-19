@@ -292,10 +292,26 @@ class NpmRegistrySource(DataSource):
                                    progress_callback=None) -> list[dict]:
         """Fetch metadata for many packages — used by ProgrammaticSurvey.
 
-        Searches across ecosystem segments to build a broad sample.
-        Returns flat dicts suitable for statistical analysis.
-        No LLM cost — just API calls.
+        Loads from catalog/npm_enriched.jsonl if available (100K+ packages).
+        Otherwise falls back to search API sampling.
         """
+        import json as _json
+        from pathlib import Path as _Path
+
+        cache_path = _Path("catalog/npm_enriched.jsonl")
+        if cache_path.exists() and cache_path.stat().st_size > 1000:
+            print(f"  [CATALOG] Loading cached enrichment from {cache_path}...")
+            records = []
+            with open(cache_path) as f:
+                for line in f:
+                    if line.strip():
+                        records.append(_json.loads(line))
+                    if len(records) >= max_records:
+                        break
+            if records:
+                print(f"  [CATALOG] Loaded {len(records)} packages (cached)")
+                return records
+
         search_url = f"{REGISTRY_URL}/-/v1/search"
         segments = [
             "react", "express", "typescript", "lodash", "webpack",
