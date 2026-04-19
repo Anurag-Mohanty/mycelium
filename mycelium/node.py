@@ -144,7 +144,7 @@ async def run_node(directive: Directive, data_source, budget_remaining: float,
         src = obs_data.get("source", {})
         observations.append(Observation(
             node_id=node_id,
-            what_i_saw=obs_data.get("what_i_saw", ""),
+            raw_evidence=obs_data.get("raw_evidence", obs_data.get("what_i_saw", "")),
             source=Source(
                 doc_id=src.get("doc_id", ""),
                 title=src.get("title", ""),
@@ -154,9 +154,10 @@ async def run_node(directive: Directive, data_source, budget_remaining: float,
                 url=src.get("url", ""),
             ),
             observation_type=obs_data.get("observation_type", "pattern"),
-            preliminary_relevance=obs_data.get("preliminary_relevance", {}),
-            reasoning=obs_data.get("reasoning", ""),
-            potential_connections=obs_data.get("potential_connections", []),
+            statistical_grounding=obs_data.get("statistical_grounding", ""),
+            local_hypothesis=obs_data.get("local_hypothesis", obs_data.get("reasoning", "")),
+            confidence=obs_data.get("confidence", 0.5),
+            surprising_because=obs_data.get("surprising_because", ""),
         ))
 
     # Build child directives from LLM output

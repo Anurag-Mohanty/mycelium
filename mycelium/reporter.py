@@ -160,7 +160,7 @@ def _format_observations(observations: list[dict]) -> str:
         for obs in obs_list[:10]:
             source = obs.get("source", {})
             lines.append(
-                f"  - {obs.get('what_i_saw', '')[:200]}\n"
+                f"  - {obs.get('raw_evidence', obs.get('what_i_saw', ''))[:200]}\n"
                 f"    Source: {source.get('title', '')} ({source.get('doc_id', '')}, {source.get('date', '')})\n"
                 f"    Agency: {source.get('agency', '')}"
             )

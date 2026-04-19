@@ -103,11 +103,12 @@ def _format_investigator_reports(children: list[NodeResult]) -> str:
         obs_text = []
         for obs in child.observations:
             obs_text.append(
-                f"  - [{obs.observation_type}] {obs.what_i_saw}\n"
+                f"  - [{obs.observation_type}] {obs.raw_evidence}\n"
                 f"    Source: {obs.source.title} ({obs.source.doc_id}, {obs.source.date})\n"
                 f"    Agency: {obs.source.agency}\n"
-                f"    Reasoning: {obs.reasoning}\n"
-                f"    Relevance: {obs.preliminary_relevance}"
+                f"    Statistical grounding: {obs.statistical_grounding}\n"
+                f"    Hypothesis: {obs.local_hypothesis}\n"
+                f"    Surprising because: {obs.surprising_because}"
             )
 
         unresolved_text = ""

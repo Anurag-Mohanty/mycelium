@@ -94,7 +94,7 @@ class WorkerNode:
         if not child_directives:
             # Resolved — no delegation needed
             self.status = "resolved"
-            top_obs = self.observations[0]["what_i_saw"][:80] if self.observations else ""
+            top_obs = self.observations[0].get("raw_evidence", "")[:80] if self.observations else ""
             events.emit("node_resolved", {
                 "node_id": self.node_id, "tree_position": self.pos,
                 "observations_count": n_obs, "cost_spent": self.spent,
@@ -294,17 +294,18 @@ class WorkerNode:
         except (json.JSONDecodeError, ValueError):
             return {"observations": [], "child_directives": []}
 
-        # Build Observation objects
+        # Build evidence packet dicts
         observations = []
         for obs_data in result.get("observations", []):
             src = obs_data.get("source", {})
             observations.append({
-                "what_i_saw": obs_data.get("what_i_saw", ""),
+                "raw_evidence": obs_data.get("raw_evidence", obs_data.get("what_i_saw", "")),
+                "statistical_grounding": obs_data.get("statistical_grounding", ""),
+                "local_hypothesis": obs_data.get("local_hypothesis", obs_data.get("reasoning", "")),
                 "source": src,
                 "observation_type": obs_data.get("observation_type", "pattern"),
-                "preliminary_relevance": obs_data.get("preliminary_relevance", {}),
-                "reasoning": obs_data.get("reasoning", ""),
-                "potential_connections": obs_data.get("potential_connections", []),
+                "confidence": obs_data.get("confidence", 0.5),
+                "surprising_because": obs_data.get("surprising_because", ""),
             })
 
         return {
@@ -558,45 +559,88 @@ Respond ONLY with valid JSON, no other text."""
 
 
 def _format_anomalies(anomalies: list[dict], documents: list[dict]) -> str:
-    """Format survey anomalies relevant to the fetched documents.
+    """Format survey anomalies as INVESTIGATION TARGETS — the agent's primary job.
 
     Filters anomalies to those referencing records in the current scope,
-    then formats as a text block prepended to the data. Domain-agnostic.
+    then formats as numbered targets with full evidence. Domain-agnostic.
     """
     if not anomalies:
         return ""
 
-    # Build set of record identifiers from fetched documents
+    # Build set of record identifiers AND company names from fetched documents
     doc_ids = set()
+    doc_names = set()
     for doc in documents:
         for key in ("name", "id", "title"):
             val = doc.get(key)
             if val:
                 doc_ids.add(str(val).lower())
+                # Also index partial IDs (e.g. CIK number from "861459/0001437749-23-004014")
+                parts = str(val).split("/")
+                for part in parts:
+                    if len(part) > 3:
+                        doc_ids.add(part.lower())
+        # Also index by company name and CIK for substring matching
+        for key in ("company", "name", "title", "cik"):
+            val = doc.get(key, "")
+            if val and len(str(val)) > 3:
+                doc_names.add(str(val).lower())
 
-    # Filter anomalies to those matching fetched records or scope-wide stats
+    def _record_in_scope(anomaly: dict) -> bool:
+        """Check if an anomaly references an entity in the fetched data."""
+        record = str(anomaly.get("record", anomaly.get("entity", ""))).lower()
+        if not record:
+            return False
+        # Exact match on IDs
+        if record in doc_ids:
+            return True
+        # Substring match on company names (e.g. "DUKE ENERGY FLORIDA" in title)
+        for name in doc_names:
+            if record in name or name in record:
+                return True
+        return False
+
+    # Filter anomalies: ONLY include those referencing records in the fetched data,
+    # OR scope-wide stats that don't reference a specific record.
     relevant = []
     for a in anomalies:
         record = str(a.get("record", a.get("entity", ""))).lower()
-        # Include if it references a record we fetched, or if it's a
-        # scope-wide finding, or if it has evidence
-        if (record in doc_ids
-                or a.get("type") in ("concentration", "unusual_combination",
-                                     "major_rewrite", "word_count_shift",
-                                     "peer_term_absence", "unique_risk_term")
-                or a.get("evidence")):
+        if _record_in_scope(a):
+            # Anomaly references a record we have — include it
+            relevant.append(a)
+        elif not record and a.get("type") in ("concentration", "unusual_combination"):
+            # Scope-wide stat without a specific record — include it
             relevant.append(a)
 
     if not relevant:
         return ""
 
-    lines = ["STATISTICAL ANOMALIES IN YOUR SCOPE (from programmatic survey):"]
-    for a in relevant[:12]:
-        lines.append(f"  - [{a.get('type', '?')}] {a.get('description', '?')}")
+    lines = [
+        "INVESTIGATION TARGETS (from statistical survey):",
+        "These anomalies were flagged by MATH — independent statistical techniques",
+        "that identified something unusual in your data. Your job is to EXPLAIN",
+        "why each anomaly exists, not to describe what the data contains.",
+        "",
+    ]
 
-        # Include evidence if available — this is the critical context
+    for i, a in enumerate(relevant[:12], 1):
+        lines.append(f"TARGET {i}: [{a.get('type', '?')}] {a.get('description', '?')}")
+
+        # Record(s) involved
+        record = a.get("record", a.get("entity", ""))
+        if record:
+            lines.append(f"  Record: {record}")
+
+        # Flagged by which techniques
+        techniques = a.get("flagged_by", [a.get("type", "unknown")])
+        if isinstance(techniques, str):
+            techniques = [techniques]
+        lines.append(f"  Flagged by: {', '.join(str(t) for t in techniques)}")
+
+        # Full evidence — this is the critical context the agent needs
         evidence = a.get("evidence", {})
         if evidence:
+            lines.append("  Evidence:")
             for ek, ev in evidence.items():
                 if isinstance(ev, list) and ev:
                     lines.append(f"    {ek}: {', '.join(str(v) for v in ev[:8])}")
@@ -606,10 +650,13 @@ def _format_anomalies(anomalies: list[dict], documents: list[dict]) -> str:
                 elif ev is not None:
                     lines.append(f"    {ek}: {ev}")
 
+        lines.append("")
+
     lines.append(
-        "\nThe statistical survey flagged these anomalies in your scope. "
-        "Investigate them — determine whether they're genuinely surprising "
-        "or easily explained.\n\n"
+        "For each target, produce an evidence packet explaining whether the "
+        "anomaly is genuinely surprising or has a mundane explanation. "
+        "Reference the SPECIFIC data from the records below.\n\n"
+        "RAW DATA (for reference):\n"
     )
     return "\n".join(lines)
 

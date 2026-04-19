@@ -651,15 +651,24 @@ class Orchestrator:
                 segment_id="deep_dive",
             )
 
-            result = await run_node(
-                directive, self.data_source,
-                self.budget.remaining(), self.budget.total,
+            # Use WorkerNode so thinking events stream to the visualizer
+            worker = WorkerNode(
+                directive=directive,
+                data_source=self.data_source,
+                budget=min(available / len(targets), self.budget.remaining()),
+                total_budget=self.budget.total,
+                lenses=lenses,
+                semaphore=self._semaphore,
+                budget_pool=self.budget,
             )
+            worker_result = await worker.run()
+
+            # Convert to NodeResult for downstream pipeline
+            result = self._worker_result_to_node_result(worker_result)
             self.all_node_results.append(result)
             self.stats.observations_collected += len(result.observations)
             self.stats.deep_dives_executed += 1
-            self.budget.record("deep_dive", result.cost)
-            self._update_tokens(result.token_usage)
+            # Worker already recorded to budget pool, just track the cost
             self._save_node(result)
 
             n_obs = len(result.observations)
@@ -983,7 +992,7 @@ Respond ONLY with a JSON array."""}],
             src = obs.get("source", {})
             observations.append(Observation(
                 node_id=result.get("node_id", ""),
-                what_i_saw=obs.get("what_i_saw", ""),
+                raw_evidence=obs.get("raw_evidence", obs.get("what_i_saw", "")),
                 source=Source(
                     doc_id=src.get("doc_id", ""),
                     title=src.get("title", ""),
@@ -992,9 +1001,10 @@ Respond ONLY with a JSON array."""}],
                     url=src.get("url", ""),
                 ),
                 observation_type=obs.get("observation_type", "pattern"),
-                preliminary_relevance=obs.get("preliminary_relevance", {}),
-                reasoning=obs.get("reasoning", ""),
-                potential_connections=obs.get("potential_connections", []),
+                statistical_grounding=obs.get("statistical_grounding", ""),
+                local_hypothesis=obs.get("local_hypothesis", obs.get("reasoning", "")),
+                confidence=obs.get("confidence", 0.5),
+                surprising_because=obs.get("surprising_because", ""),
             ))
         return NodeResult(
             node_id=result.get("node_id", ""),
@@ -1129,16 +1139,16 @@ Respond ONLY with a JSON array."""}],
                     all_obs.append(obs)
                 else:
                     all_obs.append({
-                        "what_i_saw": obs.what_i_saw,
+                        "raw_evidence": obs.raw_evidence,
                         "source": {"doc_id": obs.source.doc_id, "title": obs.source.title},
                         "observation_type": obs.observation_type,
-                        "reasoning": obs.reasoning,
+                        "local_hypothesis": obs.local_hypothesis,
                     })
 
         # Take up to 15 most interesting
         lines = []
         for obs in all_obs[:15]:
-            lines.append(f"- [{obs.get('observation_type', '?')}] {obs.get('what_i_saw', '')[:150]}")
+            lines.append(f"- [{obs.get('observation_type', '?')}] {obs.get('raw_evidence', obs.get('what_i_saw', ''))[:150]}")
         return "\n".join(lines) if lines else ""
 
     def _build_exploration_data(self) -> dict:
@@ -1192,13 +1202,14 @@ def _result_to_dict(r: NodeResult) -> dict:
         "node_id": r.node_id, "parent_id": r.parent_id,
         "scope_description": r.scope_description, "survey": r.survey,
         "observations": [
-            {"what_i_saw": o.what_i_saw,
+            {"raw_evidence": o.raw_evidence,
+             "statistical_grounding": o.statistical_grounding,
+             "local_hypothesis": o.local_hypothesis,
              "source": {"doc_id": o.source.doc_id, "title": o.source.title,
                         "agency": o.source.agency, "date": o.source.date, "url": o.source.url},
              "observation_type": o.observation_type,
-             "preliminary_relevance": o.preliminary_relevance,
-             "reasoning": o.reasoning,
-             "potential_connections": o.potential_connections}
+             "confidence": o.confidence,
+             "surprising_because": o.surprising_because}
             for o in r.observations
         ],
         "child_directives_count": len(r.child_directives),
@@ -1279,13 +1290,20 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
 
     for outlier in all_anomalies.get("outliers", []):
         if _matches(outlier):
+            field = outlier.get("field", "?")
+            value = outlier.get("value", "?")
+            z = outlier.get("z_score", "?")
+            direction = outlier.get("direction", "?")
+            record_id = outlier.get("record_id", "?")
             relevant.append({
                 "type": "outlier",
-                "record": outlier.get("record_id", "?"),
-                "field": outlier.get("field", "?"),
-                "value": outlier.get("value"),
-                "z_score": outlier.get("z_score"),
-                "direction": outlier.get("direction"),
+                "record": record_id,
+                "description": f"{record_id}: {field}={value} (z-score {z}, {direction})",
+                "field": field,
+                "value": value,
+                "z_score": z,
+                "direction": direction,
+                "flagged_by": ["basic_statistics"],
                 "summary": outlier.get("record_summary", ""),
             })
 
@@ -1295,6 +1313,7 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
                 "type": "unusual_combination",
                 "description": combo.get("description", ""),
                 "overrepresentation": combo.get("overrepresentation"),
+                "flagged_by": ["keyword_signals"],
             })
 
     for conc in all_anomalies.get("concentrations", []):
@@ -1303,10 +1322,11 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
                 "type": "concentration",
                 "field": conc.get("field", "?"),
                 "description": (
-                    f"{conc.get('concentration_pct', '?')}% in top 3 values"
+                    f"{conc.get('concentration_pct', '?')}% in top 3 values of {conc.get('field', '?')}"
                     if conc.get("concentration_pct")
                     else f"{conc.get('pct', '?')}% identical ({conc.get('dominant_value', '?')})"
                 ),
+                "flagged_by": ["entity_concentration"],
             })
 
     # New anomaly types: preserve evidence objects, not just descriptions

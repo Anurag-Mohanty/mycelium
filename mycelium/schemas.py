@@ -53,14 +53,32 @@ class Source:
 
 @dataclass
 class Observation:
-    """A single thing a node noticed, with citation."""
+    """An evidence packet — structured data, not prose."""
     node_id: str
-    what_i_saw: str
+    raw_evidence: str        # THE SPECIFIC DATA — actual values from records
     source: Source
     observation_type: str
-    preliminary_relevance: dict[str, float]
-    reasoning: str
-    potential_connections: list[str] = field(default_factory=list)
+    statistical_grounding: str = ""   # which survey techniques flagged this
+    local_hypothesis: str = ""        # specific explanation of why this is surprising
+    confidence: float = 0.5
+    surprising_because: str = ""      # expected vs actual
+
+    # Legacy compat — downstream code may still reference these
+    @property
+    def what_i_saw(self) -> str:
+        return self.raw_evidence
+
+    @property
+    def reasoning(self) -> str:
+        return self.local_hypothesis
+
+    @property
+    def preliminary_relevance(self) -> dict[str, float]:
+        return {}
+
+    @property
+    def potential_connections(self) -> list[str]:
+        return []
 
 
 @dataclass
