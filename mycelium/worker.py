@@ -495,14 +495,16 @@ class WorkerNode:
                     break
 
         self_eval = self.metrics or {}
+        default_data = {"record_count": 0, "fields_present": [], "avg_text_length": 0, "sample_record_summary": ""}
+        default_targets = {"count": 0, "targets": []}
 
         return {
             "node_id": self.node_id,
             "tree_position": self.pos,
             "scope": self.directive.scope.description[:200],
             "purpose": (self.directive.purpose or "")[:200],
-            "data_received": self._diagnostics.get("data_received", {}),
-            "anomaly_targets_received": self._diagnostics.get("anomaly_targets_received", {}),
+            "data_received": self._diagnostics.get("data_received", default_data),
+            "anomaly_targets_received": self._diagnostics.get("anomaly_targets_received", default_targets),
             "thinking_summary": self.thinking_log[0]["thinking"][:500] if self.thinking_log else "",
             "output": {
                 "observations_count": len(self.observations),
