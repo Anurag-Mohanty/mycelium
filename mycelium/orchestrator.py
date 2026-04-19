@@ -310,6 +310,7 @@ class Orchestrator:
 
         segment_workers = []
         all_anomalies = getattr(self, '_survey_anomalies', {})
+        anomaly_type_counts = {}  # track what types flow to segments
         for i, seg in enumerate(segments, 1):
             # Filter anomalies relevant to this segment's scope
             seg_anomalies = _filter_anomalies(
@@ -317,6 +318,9 @@ class Orchestrator:
                 seg.get("scope_description", seg["name"]),
                 seg.get("filters", {}).get("keyword", seg["name"]),
             )
+            for a in seg_anomalies:
+                t = a.get("type", "unknown")
+                anomaly_type_counts[t] = anomaly_type_counts.get(t, 0) + 1
             # Build purpose from survey anomalies and planner reasoning
             anomaly_summary = ""
             if seg_anomalies:
@@ -349,6 +353,15 @@ class Orchestrator:
                 budget_pool=self.budget,
             )
             segment_workers.append(worker)
+
+        # Print anomaly flow diagnostic
+        if anomaly_type_counts:
+            print(f"\n  Anomalies passed to segments:")
+            for t, c in sorted(anomaly_type_counts.items(), key=lambda x: -x[1]):
+                has_ev = sum(1 for w in segment_workers
+                             for a in w.directive.survey_anomalies
+                             if a.get("type") == t and a.get("evidence"))
+                print(f"    {t}: {c} ({has_ev} with evidence)")
 
         # Run all segment workers in parallel
         segment_results = list(await asyncio.gather(
@@ -1413,7 +1426,7 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
                 "flagged_by": ["entity_concentration"],
             })
 
-    # New anomaly types: preserve evidence objects, not just descriptions
+    # Other anomaly categories from the survey
     for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
                 "similarity_anomalies", "velocity_anomalies"):
         for a in all_anomalies.get(key, []):
@@ -1421,23 +1434,35 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
                 entry = {
                     "type": a.get("type", "anomaly"),
                     "description": a.get("description", ""),
+                    "record": a.get("entity", a.get("record", "")),
+                    "flagged_by": [key.replace("_anomalies", "")],
                 }
                 if "evidence" in a:
                     entry["evidence"] = a["evidence"]
                 relevant.append(entry)
 
-    # Also check the survey's temporal_text and peer_divergence results
+    # ALL anomaly types from anomalies_by_technique — these have the richest evidence
+    # (temporal_text has terms_added/removed, peer_divergence has peer comparisons)
+    # Pass them ALL — the worker's _format_anomalies filters to fetched documents
     survey_techniques = all_anomalies.get("anomalies_by_technique", {})
-    for tech_key in ("temporal_text", "peer_divergence"):
-        tech_data = survey_techniques.get(tech_key, {})
+    for tech_key, tech_data in survey_techniques.items():
+        if not isinstance(tech_data, dict):
+            continue
         for a in tech_data.get("anomalies", []):
-            if _matches(a):
+            if not isinstance(a, dict):
+                continue
+            # Include if it matches scope OR if it has evidence (evidence-rich
+            # anomalies are valuable even if scope match is imperfect — the
+            # worker's _format_anomalies does the final entity-level filtering)
+            if _matches(a) or a.get("evidence"):
                 entry = {
-                    "type": a.get("type", "anomaly"),
+                    "type": a.get("type", tech_key),
                     "description": a.get("description", ""),
+                    "record": a.get("entity", a.get("record", "")),
+                    "flagged_by": [tech_key],
                 }
                 if "evidence" in a:
                     entry["evidence"] = a["evidence"]
                 relevant.append(entry)
 
-    return relevant[:25]  # slightly larger cap to include evidence-rich items
+    return relevant[:50]  # larger cap to include evidence-rich anomalies
