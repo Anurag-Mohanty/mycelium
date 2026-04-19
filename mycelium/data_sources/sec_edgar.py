@@ -369,7 +369,9 @@ class SecEdgarSource(DataSource):
         # CHANGE across years are more analytically interesting than those
         # with identical boilerplate every year.
         skip_patterns = ("trust", "receivabl", "mortgage", "asset-backed",
-                         "acquisition corp", "certificate", "funding")
+                         "acquisition corp", "certificate", "funding",
+                         "auto assets", "auto receivables", "llc series",
+                         "depositor", "issuing entity")
 
         # Group filings by company
         company_filings = {}
@@ -389,7 +391,9 @@ class SecEdgarSource(DataSource):
                 continue
             years = sorted(set(f.get("year", 0) for f in filings))
             year_spread = (max(years) - min(years)) if len(years) > 1 else 0
-            company_scores[name] = len(filings) * (year_spread + 1)
+            # Score by year spread primarily — a company with 5 years of data
+            # is more interesting than one with 10 filings in 1 year
+            company_scores[name] = (year_spread + 1) * min(len(filings), 5)
 
         top_companies = sorted(company_scores, key=company_scores.get, reverse=True)[:50]
 
@@ -417,12 +421,17 @@ class SecEdgarSource(DataSource):
             accessions = recent.get("accessionNumber", [])
             primary_docs = recent.get("primaryDocument", [])
 
+            filings_for_company = 0
+            max_filings_per_company = 5
+
             for j, form in enumerate(forms):
                 if form != "10-K" or j >= len(dates):
                     continue
                 year = int(dates[j][:4]) if dates[j] else 0
                 if year < 2021:
                     continue
+                if filings_for_company >= max_filings_per_company:
+                    break
 
                 accession = accessions[j] if j < len(accessions) else ""
                 primary_doc = primary_docs[j] if j < len(primary_docs) else ""
@@ -458,6 +467,7 @@ class SecEdgarSource(DataSource):
                     "risk_factors_length": len(risk_factors),
                     "risk_factors_word_count": len(risk_factors.split()),
                 })
+                filings_for_company += 1
 
             if progress_callback:
                 progress_callback({
@@ -604,38 +614,30 @@ def _extract_risk_factors(html: str) -> str | None:
     if not matches:
         return None
 
-    # Pick the match whose content STARTS with actual prose, not a page number.
-    # TOC entries look like: "Item 1A. Risk Factors 5 Item 1B..."
-    # Actual sections look like: "Item 1A. Risk Factors The following..."
-    end_pattern = re.compile(r'Item\s+1B|Item\s+2[\.\s]+Prop', re.IGNORECASE)
+    # Pick the match followed by the MOST text before the next section marker.
+    # The actual Item 1A section is always longer than any TOC reference to it.
+    end_marker = re.compile(r'Item\s+1B|Item\s+2[\.\s]+Prop', re.IGNORECASE)
 
-    best_match = matches[-1]  # default to last match
+    best_match = None
+    best_length = 0
     for m in matches:
-        # Check what comes after the header — if it's prose (not a number/page ref), it's the real section
-        after = text[m.end():m.end() + 100].strip()
-        # TOC entries have just a page number then next item; real sections have sentences
-        if len(after) > 20 and not after[0].isdigit() and "Item" not in after[:30]:
+        # Find the next section marker after this match (no skip — find the nearest one)
+        end_search = end_marker.search(text, m.end())
+        section_length = (end_search.start() - m.start()) if end_search else (len(text) - m.start())
+        if section_length > best_length:
+            best_length = section_length
             best_match = m
-            break
+
+    if best_match is None:
+        best_match = matches[-1]
 
     start_pos = best_match.start()
 
     # Find the end — "Item 1B" or "Item 2" AFTER the start
-    end_patterns = [
-        r'Item\s+1B[\.\s\-—:]+',
-        r'ITEM\s+1B[\.\s\-—:]+',
-        r'Item\s+2[\.\s\-—:]+\s*Properties',
-        r'ITEM\s+2[\.\s\-—:]+\s*PROPERTIES',
-    ]
-
     end_pos = len(text)
-    for ep in end_patterns:
-        match = re.search(ep, text[start_pos + 100:], re.IGNORECASE)
-        if match:
-            candidate = start_pos + 100 + match.start()
-            if candidate < end_pos:
-                end_pos = candidate
-            break
+    end_search = end_marker.search(text, best_match.end())
+    if end_search:
+        end_pos = end_search.start()
 
     risk_text = text[start_pos:end_pos].strip()
 
