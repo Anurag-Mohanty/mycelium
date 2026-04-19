@@ -47,6 +47,7 @@ class WorkerNode:
         self.child_results = []
         self.findings = []            # from Turn 2 synthesis
         self.thinking_log = []        # all thinking blocks across turns
+        self.metrics = {}             # purpose_addressed, evidence_quality, budget_efficiency
         self.status = "created"
 
     @property
@@ -127,6 +128,7 @@ class WorkerNode:
                 ),
                 lenses=self.lenses,
                 parent_context=cd.get("parent_context", ""),
+                purpose=cd.get("purpose", cd.get("hypothesis", "")),
                 node_id=str(uuid.uuid4()),
                 parent_id=self.node_id,
                 tree_position=f"{self.pos}.{i}" if self.pos != "ROOT" else str(i),
@@ -257,7 +259,10 @@ class WorkerNode:
         # Build anomaly context from survey data
         anomaly_ctx = _format_anomalies(self.directive.survey_anomalies, documents)
 
+        purpose = self.directive.purpose or "Investigate the data in your scope and report what you find."
+
         prompt = NODE_REASONING_PROMPT.format(
+            purpose=purpose,
             parent_context=parent_ctx,
             scope_description=self.directive.scope.description,
             lenses=lenses_str,
@@ -308,11 +313,21 @@ class WorkerNode:
                 "surprising_because": obs_data.get("surprising_because", ""),
             })
 
+        # Capture self-evaluation
+        self_eval = result.get("self_evaluation", {})
+        self.metrics = {
+            "purpose_addressed": self_eval.get("purpose_addressed", True),
+            "purpose_gap": self_eval.get("purpose_gap", ""),
+            "evidence_quality": self_eval.get("evidence_quality", "medium"),
+            "budget_efficiency": 0.0,  # computed after all work completes
+        }
+
         return {
             "survey": result.get("survey", ""),
             "observations": observations,
             "child_directives": result.get("child_directives", []),
             "unresolved": result.get("unresolved", []),
+            "self_evaluation": self_eval,
         }
 
     # === Turn 2: Review children ===
@@ -381,6 +396,7 @@ class WorkerNode:
                 ),
                 lenses=self.lenses,
                 parent_context=fd.get("parent_context", "Follow-up investigation"),
+                purpose=fd.get("purpose", fd.get("parent_context", "Follow-up investigation")),
                 node_id=str(uuid.uuid4()),
                 parent_id=self.node_id,
                 tree_position=f"{self.pos}.F{i}",
@@ -429,10 +445,16 @@ class WorkerNode:
 
     def _result(self) -> dict:
         """Package results for parent or orchestrator."""
+        # Compute budget efficiency
+        total_tree_spent = self._estimate_total_spent()
+        if self.budget > 0:
+            self.metrics["budget_efficiency"] = round(total_tree_spent / self.budget * 100, 1)
+
         return {
             "node_id": self.node_id,
             "parent_id": self.directive.parent_id,
             "scope_description": self.directive.scope.description,
+            "purpose": self.directive.purpose,
             "observations": self.observations,
             "findings": self.findings,
             "thinking_log": self.thinking_log,
@@ -441,6 +463,7 @@ class WorkerNode:
             "children_count": len(self.child_workers),
             "child_results": self.child_results,
             "status": self.status,
+            "metrics": self.metrics,
         }
 
 
@@ -517,19 +540,30 @@ BUDGET STATUS:
 
 Now reason about what your team found:
 
-1. SYNTHESIZE: What patterns connect findings across workers? What did one worker
-   find that changes the meaning of another's findings?
+1. PURPOSE REVIEW: For each worker, assess whether its output addressed the purpose \
+you gave it. Did it deliver what you needed, or did it go off track? Workers that \
+went off track should not be incorporated into synthesis — note them as wasted budget.
 
-2. EVALUATE: Which findings are strongest? Which workers found rich veins vs dead ends?
+2. SYNTHESIZE: What patterns connect findings across workers that DID address their \
+purpose? What did one worker find that changes the meaning of another's findings?
 
-3. RESOURCE DECISION: You have ${budget_remaining:.2f} left. Options:
+3. EVALUATE: Which findings are strongest? Which workers found rich veins vs dead ends?
+
+4. RESOURCE DECISION: You have ${budget_remaining:.2f} left. Options:
    a) Spawn follow-up workers to trace specific findings deeper
    b) Return surplus to your manager (if coverage is sufficient)
 
-4. FINDINGS: What cross-cutting findings emerge from synthesizing all workers' observations?
+5. FINDINGS: What cross-cutting findings emerge from synthesizing all workers' observations?
 
 Return JSON:
 {{
+    "worker_reviews": [
+        {{
+            "worker_scope": "what this worker was asked to investigate",
+            "purpose_aligned": true,
+            "assessment": "did this worker deliver what I needed? one sentence."
+        }}
+    ],
     "synthesis": {{
         "patterns": ["cross-cutting pattern descriptions"],
         "contradictions": ["things that conflict"],
@@ -547,7 +581,8 @@ Return JSON:
     "followup_children": [
         {{
             "scope_description": "what to investigate next",
-            "parent_context": "why this follow-up is needed",
+            "purpose": "why this follow-up is needed and what you need from it",
+            "parent_context": "the specific evidence that motivated this",
             "budget": 0.10
         }}
     ],

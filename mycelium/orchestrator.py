@@ -317,6 +317,15 @@ class Orchestrator:
                 seg.get("scope_description", seg["name"]),
                 seg.get("filters", {}).get("keyword", seg["name"]),
             )
+            # Build purpose from survey anomalies and planner reasoning
+            anomaly_summary = ""
+            if seg_anomalies:
+                anomaly_summary = f" Survey flagged {len(seg_anomalies)} anomalies in this scope."
+            purpose = (
+                f"{seg.get('reasoning', 'Investigate this segment.')}"
+                f"{anomaly_summary}"
+            )
+
             directive = Directive(
                 scope=Scope(
                     source=self.data_source.__class__.__name__,
@@ -325,6 +334,7 @@ class Orchestrator:
                 ),
                 lenses=lenses,
                 parent_context=f"Planner assigned this segment: {seg.get('reasoning', '')}",
+                purpose=purpose,
                 tree_position=str(i),
                 segment_id=seg["name"],
                 survey_anomalies=seg_anomalies,
@@ -647,6 +657,7 @@ class Orchestrator:
                 lenses=lenses,
                 parent_context=f"DEEP DIVE: {target.get('why_this_one', '')}. "
                                f"This is targeted investigation — trace this finding to its full extent.",
+                purpose=target.get("investigation_directive", target.get("why_this_one", "")),
                 tree_position=f"DD.{i}",
                 segment_id="deep_dive",
             )

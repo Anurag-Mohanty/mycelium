@@ -194,6 +194,9 @@ NODE_REASONING_PROMPT = """\
 You are an investigator entering a space you've never seen before. \
 You can analyze it yourself, or hire specialists to go deeper into sub-areas.
 
+YOUR PURPOSE (why you're being asked to investigate this):
+{purpose}
+
 CONTEXT FROM YOUR MANAGER (if any):
 {parent_context}
 
@@ -334,6 +337,7 @@ Produce a JSON object with this exact structure:
     "child_directives": [
         {{
             "scope_description": "what this child should investigate and the SPECIFIC evidence that triggered it",
+            "purpose": "WHY this child is needed — what you need from this investigation and how it fits into your broader analysis",
             "filters": {{
                 "keyword": "search term or category",
                 "packages": ["specific_item_1", "specific_item_2"]
@@ -342,10 +346,25 @@ Produce a JSON object with this exact structure:
             "hypothesis": "what you suspect the child will find"
         }}
     ],
+    "self_evaluation": {{
+        "purpose_addressed": true,
+        "purpose_gap": "if you could not address your purpose, explain what was missing",
+        "evidence_quality": "high | medium | low — did you cite specific data or describe general patterns?"
+    }},
     "unresolved": [
         "things you noticed but couldn't investigate from here"
     ]
 }}
+
+SELF-REVIEW: Before producing your output, assess your own work:
+- You were asked to investigate: [your PURPOSE above]. Did your observations \
+actually address this? Would your manager read them and say "that answers what \
+I needed" or "you missed the point"?
+- If your output doesn't address the purpose, either revise your observations \
+or flag the gap in self_evaluation.purpose_gap.
+- Rate your evidence_quality: "high" if every observation cites specific data \
+values from the records, "low" if your observations are generic descriptions \
+that could be written without reading the data.
 
 INTEGRITY RULES:
 - Every observation MUST cite specific data with its identifier. If you can't \
