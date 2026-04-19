@@ -401,16 +401,31 @@ class SecEdgarSource(DataSource):
 
         max_filings_per_company = 5
 
-        # Group filings by company, filter SPVs, cap per company
-        company_filings = {}
+        # Group ALL filings by company, filter SPVs
+        company_all_filings = {}
         for f in all_filings:
             name = f.get("company", "")
             if not name or any(p in name.lower() for p in skip_patterns):
                 continue
-            if name not in company_filings:
-                company_filings[name] = []
-            if len(company_filings[name]) < max_filings_per_company:
-                company_filings[name].append(f)
+            if name not in company_all_filings:
+                company_all_filings[name] = []
+            company_all_filings[name].append(f)
+
+        # For each company, select up to max_filings_per_company with YEAR DIVERSITY.
+        # Prioritize: one filing per year (most recent first), then fill remaining slots.
+        company_filings = {}
+        for name, filings in company_all_filings.items():
+            # Sort by year descending — most recent first
+            filings.sort(key=lambda f: f.get("year", 0), reverse=True)
+            # Pick one per year first
+            seen_years = set()
+            selected = []
+            for f in filings:
+                yr = f.get("year", 0)
+                if yr not in seen_years and len(selected) < max_filings_per_company:
+                    selected.append(f)
+                    seen_years.add(yr)
+            company_filings[name] = selected
 
         # Flatten to a list of filings to enrich
         filings_to_enrich = []
