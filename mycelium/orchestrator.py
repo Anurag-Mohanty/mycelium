@@ -1023,7 +1023,7 @@ Respond ONLY with a JSON array."""}],
         # Compute summary stats
         total = len(all_diags)
         zero_obs = sum(1 for d in all_diags if d["output"]["observations_count"] == 0)
-        with_targets = sum(1 for d in all_diags if d["anomaly_targets_received"]["count"] > 0)
+        with_targets = sum(1 for d in all_diags if d.get("anomaly_targets_received", {}).get("count", 0) > 0)
         targets_with_evidence = sum(
             1 for d in all_diags
             if any(t.get("has_evidence") for t in d["anomaly_targets_received"].get("targets", []))
