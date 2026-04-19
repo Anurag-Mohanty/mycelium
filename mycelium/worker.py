@@ -48,6 +48,7 @@ class WorkerNode:
         self.findings = []            # from Turn 2 synthesis
         self.thinking_log = []        # all thinking blocks across turns
         self.metrics = {}             # purpose_addressed, evidence_quality, budget_efficiency
+        self.token_usage = {"input_tokens": 0, "output_tokens": 0}
         self.status = "created"
         self._diagnostics = {}        # raw data for diagnostic log
 
@@ -309,9 +310,11 @@ class WorkerNode:
 
         # LLM call with extended thinking
         async with self._semaphore:
-            thinking, output, cost = await _call_llm(prompt)
+            thinking, output, cost, usage = await _call_llm(prompt)
 
         self.spent += cost
+        self.token_usage["input_tokens"] += usage["input_tokens"]
+        self.token_usage["output_tokens"] += usage["output_tokens"]
         if self._budget_pool:
             self._budget_pool.record("exploration", cost)
         self.thinking_log.append({"turn": "initial", "thinking": thinking})
@@ -391,9 +394,11 @@ class WorkerNode:
             return None
 
         async with self._semaphore:
-            thinking, output, cost = await _call_llm(prompt)
+            thinking, output, cost, usage = await _call_llm(prompt)
 
         self.spent += cost
+        self.token_usage["input_tokens"] += usage["input_tokens"]
+        self.token_usage["output_tokens"] += usage["output_tokens"]
         if self._budget_pool:
             self._budget_pool.record("exploration", cost)
         self.thinking_log.append({"turn": "review", "thinking": thinking})
@@ -548,13 +553,14 @@ class WorkerNode:
             "child_results": self.child_results,
             "status": self.status,
             "metrics": self.metrics,
+            "token_usage": self.token_usage,
             "diagnostic": self._build_diagnostic(),
         }
 
 
 # === Module-level helpers (no domain-specific logic) ===
 
-async def _call_llm(prompt: str, thinking_budget: int = 5000) -> tuple[str, str, float]:
+async def _call_llm(prompt: str, thinking_budget: int = 5000) -> tuple[str, str, float, dict]:
     """Make one LLM call with extended thinking. Returns (thinking, output, cost)."""
     client = anthropic.Anthropic()
     response = client.messages.create(
@@ -572,8 +578,11 @@ async def _call_llm(prompt: str, thinking_budget: int = 5000) -> tuple[str, str,
         elif block.type == "text":
             output = block.text
 
-    cost = (response.usage.input_tokens * 3 + response.usage.output_tokens * 15) / 1_000_000
-    return thinking, output, cost
+    input_tokens = response.usage.input_tokens
+    output_tokens = response.usage.output_tokens
+    cost = (input_tokens * 3 + output_tokens * 15) / 1_000_000
+    usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+    return thinking, output, cost, usage
 
 
 def _emit_thinking_chunks(node_id: str, turn: str, thinking: str):

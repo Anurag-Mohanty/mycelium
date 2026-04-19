@@ -309,6 +309,7 @@ class Orchestrator:
         segment_budget_each = exploration_budget / max(1, len(segments))
 
         segment_workers = []
+        self._segment_workers = segment_workers  # save ref for metrics
         all_anomalies = getattr(self, '_survey_anomalies', {})
         anomaly_type_counts = {}  # track what types flow to segments
         for i, seg in enumerate(segments, 1):
@@ -456,6 +457,9 @@ class Orchestrator:
             "total_cost": self.budget.spent,
             "elapsed_time": time.time() - self.start_time,
         })
+
+        # Compute and save run metrics
+        self._write_run_metrics()
 
         if self.visualize:
             await asyncio.sleep(2)  # let final events reach the browser
@@ -1290,6 +1294,129 @@ Respond ONLY with a JSON array."""}],
         with open(tree_file, "w") as f:
             json.dump(data, f, indent=2, default=str)
         print(f"\n  Tree saved to {tree_file}")
+
+    def _write_run_metrics(self):
+        """Compute and write run metrics from existing data. No LLM calls."""
+        elapsed = time.time() - self.start_time
+
+        # Collect token usage from worker tree
+        total_tokens = {"input_tokens": 0, "output_tokens": 0}
+        all_workers = []
+
+        def _walk_workers(worker):
+            all_workers.append(worker)
+            total_tokens["input_tokens"] += worker.token_usage.get("input_tokens", 0)
+            total_tokens["output_tokens"] += worker.token_usage.get("output_tokens", 0)
+            for child in worker.child_workers:
+                _walk_workers(child)
+
+        for w in getattr(self, '_segment_workers', []):
+            _walk_workers(w)
+
+        # Count zero-obs nodes and self-eval gaps
+        zero_obs_nodes = sum(1 for w in all_workers if not w.observations)
+        zero_obs_cost = sum(w.spent for w in all_workers if not w.observations)
+        self_eval_gaps = sum(1 for w in all_workers
+                            if not w.metrics.get("purpose_addressed", True))
+
+        # Count validated findings
+        confirmed = sum(1 for v in self.all_validations if v.verdict == "confirmed")
+        weakened = sum(1 for v in self.all_validations if v.verdict == "weakened")
+        refuted = sum(1 for v in self.all_validations if v.verdict == "refuted")
+        total_validated = len(self.all_validations)
+
+        total_obs = self.stats.observations_collected
+        total_nodes = len(all_workers) if all_workers else self.stats.nodes_spawned
+        total_cost = self.budget.spent
+
+        # Enrichment data
+        enriched_count = len(getattr(self.data_source, '_enriched_filings', []))
+        source_name = self.data_source.__class__.__name__
+
+        metrics = {
+            "run_id": self.run_id,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "source": source_name,
+            "cost": {
+                "total": round(total_cost, 3),
+                "by_phase": {k: round(v, 3) for k, v in self.budget.phase_spent.items()},
+                "per_node": round(total_cost / max(1, total_nodes), 3),
+                "per_observation": round(total_cost / max(1, total_obs), 3),
+                "per_validated_finding": round(total_cost / max(1, confirmed), 3) if confirmed else None,
+                "budget_authorized": self.budget.total,
+                "budget_utilization": round(total_cost / max(0.01, self.budget.total), 3),
+                "wasted_on_zero_obs": round(zero_obs_cost, 3),
+            },
+            "quality": {
+                "total_observations": total_obs,
+                "findings_submitted": total_validated,
+                "findings_confirmed": confirmed,
+                "findings_weakened": weakened,
+                "findings_refuted": refuted,
+                "validation_rate": round(confirmed / max(1, total_validated), 3),
+                "observations_per_node": round(total_obs / max(1, total_nodes), 2),
+                "observations_per_dollar": round(total_obs / max(0.01, total_cost), 1),
+                "zero_obs_nodes": zero_obs_nodes,
+                "zero_obs_pct": round(zero_obs_nodes / max(1, total_nodes), 3),
+                "self_eval_gaps": self_eval_gaps,
+                "self_eval_gap_pct": round(self_eval_gaps / max(1, total_nodes), 3),
+            },
+            "efficiency": {
+                "wall_clock_seconds": round(elapsed),
+                "nodes_spawned": total_nodes,
+                "nodes_resolved": self.stats.nodes_resolved,
+                "nodes_decomposed": self.stats.nodes_spawned - self.stats.nodes_resolved,
+                "max_depth": self.stats.max_depth_reached,
+                "avg_branching_factor": round(self.stats.avg_branching_factor, 2),
+                "deep_dives": self.stats.deep_dives_executed,
+            },
+            "tokens": {
+                "input_tokens": total_tokens["input_tokens"],
+                "output_tokens": total_tokens["output_tokens"],
+                "total_tokens": total_tokens["input_tokens"] + total_tokens["output_tokens"],
+                "avg_tokens_per_node": round(
+                    (total_tokens["input_tokens"] + total_tokens["output_tokens"]) / max(1, total_nodes)),
+            },
+            "data_coverage": {
+                "source": source_name,
+                "records_enriched": enriched_count,
+                "records_analyzed_by_survey": enriched_count,
+            },
+        }
+
+        # Write metrics.json
+        metrics_path = self.run_dir / "metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(metrics, f, indent=2, default=str)
+
+        # Append to run history
+        from pathlib import Path
+        history_path = Path("catalog/run_history.jsonl")
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        history_line = {
+            "run_id": self.run_id,
+            "timestamp": metrics["timestamp"],
+            "source": source_name,
+            "budget": self.budget.total,
+            "cost": round(total_cost, 2),
+            "nodes": total_nodes,
+            "observations": total_obs,
+            "confirmed_findings": confirmed,
+            "cost_per_valid_finding": metrics["cost"]["per_validated_finding"],
+            "zero_obs_pct": metrics["quality"]["zero_obs_pct"],
+            "wall_clock_seconds": round(elapsed),
+        }
+        with open(history_path, "a") as f:
+            f.write(json.dumps(history_line, default=str) + "\n")
+
+        # Print summary
+        valid_cost = f"${metrics['cost']['per_validated_finding']:.2f}" if confirmed else "N/A"
+        print(f"\n  RUN METRICS: ${total_cost:.2f}/{self.budget.total:.2f} | "
+              f"{total_obs} obs, {confirmed} confirmed findings | "
+              f"{valid_cost}/valid finding | "
+              f"{zero_obs_nodes}/{total_nodes} zero-obs nodes | "
+              f"{int(elapsed//60)}m{int(elapsed%60)}s | "
+              f"{enriched_count} records")
 
 
 # --- Serialization ---
