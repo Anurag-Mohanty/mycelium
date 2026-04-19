@@ -312,7 +312,31 @@ class SecEdgarSource(DataSource):
 
     async def fetch_bulk_metadata(self, max_records: int = 20000,
                                    progress_callback=None) -> list[dict]:
-        """Fetch all 10-K filing metadata from quarterly indices."""
+        """Fetch all 10-K filing metadata from quarterly indices.
+
+        Caches enriched filings to catalog/sec_enriched.jsonl. If the cache
+        exists and has data, loads from cache instead of re-fetching (~26 min saved).
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        # Check for cached enrichment
+        cache_path = _Path("catalog/sec_enriched.jsonl")
+        if cache_path.exists() and cache_path.stat().st_size > 1000:
+            print(f"  [CATALOG] Loading cached enrichment from {cache_path}...")
+            enriched = []
+            with open(cache_path) as f:
+                for line in f:
+                    if line.strip():
+                        enriched.append(_json.loads(line))
+            if enriched:
+                companies = len(set(r.get("company", "") for r in enriched))
+                print(f"  [CATALOG] Loaded {len(enriched)} filings from {companies} companies (cached)")
+                self._enriched_filings = enriched
+                # Also populate index cache for fetch() queries
+                self._index_cache = enriched
+                return enriched
+
         years = list(range(2021, 2027))
         all_filings = []
 
@@ -341,15 +365,20 @@ class SecEdgarSource(DataSource):
 
         self._index_cache = all_filings
 
-        # Phase 2: Enrich top companies with actual risk factor content
+        # Phase 2: Enrich ALL operating companies with actual risk factor content
         if progress_callback:
             progress_callback({"phase": "enriching_content", "fetched": len(all_filings),
                                "total_estimated": max_records})
 
         enriched = await self._enrich_top_companies(all_filings, progress_callback)
         if enriched:
-            # Store enriched data for comparative context during exploration
             self._enriched_filings = enriched
+            # Save to cache for future runs
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "w") as f:
+                for r in enriched:
+                    f.write(_json.dumps(r, default=str) + "\n")
+            print(f"  [CATALOG] Saved enrichment cache to {cache_path}")
             return enriched
 
         return all_filings[:max_records]
