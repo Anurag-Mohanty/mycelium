@@ -577,26 +577,34 @@ def _format_anomalies(anomalies: list[dict], documents: list[dict]) -> str:
     # Filter anomalies to those matching fetched records or scope-wide stats
     relevant = []
     for a in anomalies:
-        record = str(a.get("record", "")).lower()
+        record = str(a.get("record", a.get("entity", ""))).lower()
         # Include if it references a record we fetched, or if it's a
-        # scope-wide statistical finding (concentration, unusual combo)
-        if record in doc_ids or a.get("type") in ("concentration", "unusual_combination"):
+        # scope-wide finding, or if it has evidence
+        if (record in doc_ids
+                or a.get("type") in ("concentration", "unusual_combination",
+                                     "major_rewrite", "word_count_shift",
+                                     "peer_term_absence", "unique_risk_term")
+                or a.get("evidence")):
             relevant.append(a)
 
     if not relevant:
         return ""
 
     lines = ["STATISTICAL ANOMALIES IN YOUR SCOPE (from programmatic survey):"]
-    for a in relevant[:10]:
-        if a["type"] == "outlier":
-            lines.append(
-                f"  - {a.get('record', '?')}: {a.get('field', '?')} = {a.get('value', '?')} "
-                f"(z-score {a.get('z_score', '?')}, {a.get('direction', '?')} outlier)"
-            )
-        elif a["type"] == "unusual_combination":
-            lines.append(f"  - {a.get('description', '?')}")
-        elif a["type"] == "concentration":
-            lines.append(f"  - {a.get('field', '?')}: {a.get('description', '?')}")
+    for a in relevant[:12]:
+        lines.append(f"  - [{a.get('type', '?')}] {a.get('description', '?')}")
+
+        # Include evidence if available — this is the critical context
+        evidence = a.get("evidence", {})
+        if evidence:
+            for ek, ev in evidence.items():
+                if isinstance(ev, list) and ev:
+                    lines.append(f"    {ek}: {', '.join(str(v) for v in ev[:8])}")
+                elif isinstance(ev, dict):
+                    for dk, dv in ev.items():
+                        lines.append(f"    {dk}: {dv}")
+                elif ev is not None:
+                    lines.append(f"    {ek}: {ev}")
 
     lines.append(
         "\nThe statistical survey flagged these anomalies in your scope. "

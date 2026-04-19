@@ -199,6 +199,7 @@ class Orchestrator:
                     "graph_anomalies": catalog_stats.get("graph_anomalies", []),
                     "similarity_anomalies": catalog_stats.get("similarity_anomalies", []),
                     "velocity_anomalies": catalog_stats.get("velocity_anomalies", []),
+                    "anomalies_by_technique": catalog_stats.get("anomalies_by_technique", {}),
                 }
 
                 # Translate raw stats into human-readable descriptions (one cheap LLM call)
@@ -1308,14 +1309,31 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
                 ),
             })
 
-    # New anomaly types from Groups B-F: pass through with description
+    # New anomaly types: preserve evidence objects, not just descriptions
     for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
                 "similarity_anomalies", "velocity_anomalies"):
         for a in all_anomalies.get(key, []):
             if _matches(a):
-                relevant.append({
+                entry = {
                     "type": a.get("type", "anomaly"),
                     "description": a.get("description", ""),
-                })
+                }
+                if "evidence" in a:
+                    entry["evidence"] = a["evidence"]
+                relevant.append(entry)
 
-    return relevant[:20]  # cap to avoid bloating the prompt
+    # Also check the survey's temporal_text and peer_divergence results
+    survey_techniques = all_anomalies.get("anomalies_by_technique", {})
+    for tech_key in ("temporal_text", "peer_divergence"):
+        tech_data = survey_techniques.get(tech_key, {})
+        for a in tech_data.get("anomalies", []):
+            if _matches(a):
+                entry = {
+                    "type": a.get("type", "anomaly"),
+                    "description": a.get("description", ""),
+                }
+                if "evidence" in a:
+                    entry["evidence"] = a["evidence"]
+                relevant.append(entry)
+
+    return relevant[:25]  # slightly larger cap to include evidence-rich items

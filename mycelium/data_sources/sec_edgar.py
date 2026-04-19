@@ -364,18 +364,34 @@ class SecEdgarSource(DataSource):
         """
         from collections import Counter
 
-        # Find 50 interesting companies — skip trusts, receivables, and SPACs
-        # which file hundreds of identical boilerplate docs
+        # Pick 50 companies with the most INTERESTING filing patterns.
+        # Score by variance in filing metadata — companies whose filings
+        # CHANGE across years are more analytically interesting than those
+        # with identical boilerplate every year.
         skip_patterns = ("trust", "receivabl", "mortgage", "asset-backed",
                          "acquisition corp", "certificate", "funding")
-        company_counts = Counter()
+
+        # Group filings by company
+        company_filings = {}
         for f in all_filings:
             name = f.get("company", "")
-            if name and not any(p in name.lower() for p in skip_patterns):
-                company_counts[name] += 1
-        # Pick companies with multiple filings (multi-year coverage)
-        top_companies = [name for name, count in company_counts.most_common(80)
-                         if count >= 2][:50]
+            if not name or any(p in name.lower() for p in skip_patterns):
+                continue
+            if name not in company_filings:
+                company_filings[name] = []
+            company_filings[name].append(f)
+
+        # Score each company by variance: number of filings * date spread
+        # Companies with multi-year coverage across different periods score highest
+        company_scores = {}
+        for name, filings in company_filings.items():
+            if len(filings) < 2:
+                continue
+            years = sorted(set(f.get("year", 0) for f in filings))
+            year_spread = (max(years) - min(years)) if len(years) > 1 else 0
+            company_scores[name] = len(filings) * (year_spread + 1)
+
+        top_companies = sorted(company_scores, key=company_scores.get, reverse=True)[:50]
 
         print(f"  [CATALOG] Enriching {len(top_companies)} companies with risk factor content...")
 

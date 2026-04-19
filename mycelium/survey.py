@@ -789,8 +789,20 @@ class AnalyticalSurvey:
                 prev_date = str(prev_row.get(date_col, "?"))[:10]
                 curr_date = str(curr_row.get(date_col, "?"))[:10]
 
-                # Major rewrite
+                # Major rewrite — extract the terms that DIFFER most
                 if sim < 0.7:
+                    prev_arr = np.asarray(prev_vec.todense()).flatten()
+                    curr_arr = np.asarray(curr_vec.todense()).flatten()
+                    diff = prev_arr - curr_arr
+                    sorted_indices = np.argsort(diff)
+
+                    # Terms stronger in previous (removed/weakened)
+                    removed = [str(feature_names[i]) for i in sorted_indices[-10:]
+                               if diff[i] > 0.01]
+                    # Terms stronger in current (added/strengthened)
+                    added = [str(feature_names[i]) for i in sorted_indices[:10]
+                             if diff[i] < -0.01]
+
                     results["anomalies"].append({
                         "type": "major_rewrite",
                         "entity": str(entity_name),
@@ -802,6 +814,12 @@ class AnalyticalSurvey:
                             f"{entity_name}: major text rewrite between {prev_date} "
                             f"and {curr_date} (cosine similarity {sim:.2f})"
                         ),
+                        "evidence": {
+                            "terms_removed_or_weakened": removed,
+                            "terms_added_or_strengthened": added,
+                            "prev_word_count": len(str(prev_row.get(text_col, "")).split()),
+                            "curr_word_count": len(str(curr_row.get(text_col, "")).split()),
+                        },
                     })
 
                 # Word count shift
@@ -824,6 +842,12 @@ class AnalyticalSurvey:
                                 f"{abs(change_pct):.0f}% ({prev_wc:,} → {curr_wc:,}) "
                                 f"between {prev_date} and {curr_date}"
                             ),
+                            "evidence": {
+                                "previous": {"date": prev_date, "word_count": prev_wc},
+                                "current": {"date": curr_date, "word_count": curr_wc},
+                                "change": curr_wc - prev_wc,
+                                "change_pct": round(change_pct, 1),
+                            },
                         })
 
                 # Terms that disappeared
@@ -908,6 +932,10 @@ class AnalyticalSurvey:
                         for i, used in enumerate(usage) if not used
                     ]
                     if outliers:
+                        peers_using = [
+                            str(peer_group.iloc[i][group_col])
+                            for i, used in enumerate(usage) if used
+                        ]
                         results["anomalies"].append({
                             "type": "peer_term_absence",
                             "term": term,
@@ -919,6 +947,12 @@ class AnalyticalSurvey:
                                 f"Term '{term}' used by {usage_pct * 100:.0f}% of {peer_name} peers "
                                 f"but ABSENT from: {', '.join(outliers)}"
                             ),
+                            "evidence": {
+                                "term": term,
+                                "peers_using_term": peers_using[:10],
+                                "peers_missing_term": outliers,
+                                "peer_group_size": len(peer_group),
+                            },
                         })
 
                 # Term unique to one entity — no peers use it
@@ -926,6 +960,10 @@ class AnalyticalSurvey:
                     unique_users = [
                         str(peer_group.iloc[i][group_col])
                         for i, used in enumerate(usage) if used
+                    ]
+                    non_users = [
+                        str(peer_group.iloc[i][group_col])
+                        for i, used in enumerate(usage) if not used
                     ]
                     results["anomalies"].append({
                         "type": "unique_risk_term",
@@ -937,6 +975,12 @@ class AnalyticalSurvey:
                             f"Only {', '.join(unique_users)} mentions '{term}' — "
                             f"no other {peer_name} peer uses this term"
                         ),
+                        "evidence": {
+                            "term": term,
+                            "used_by": unique_users,
+                            "not_used_by": non_users[:10],
+                            "peer_group_size": len(peer_group),
+                        },
                     })
 
         # Deduplicate and limit
