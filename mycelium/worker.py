@@ -288,7 +288,9 @@ class WorkerNode:
 
         purpose = self.directive.purpose or "Investigate the data in your scope and report what you find."
 
+        import datetime
         prompt = NODE_REASONING_PROMPT.format(
+            current_date=datetime.date.today().isoformat(),
             purpose=purpose,
             parent_context=parent_ctx,
             scope_description=self.directive.scope.description,

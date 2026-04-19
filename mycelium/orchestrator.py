@@ -319,6 +319,14 @@ class Orchestrator:
                 seg.get("scope_description", seg["name"]),
                 seg.get("filters", {}).get("keyword", seg["name"]),
             )
+            # Count total anomalies available vs matched
+            total_available = sum(
+                len(v.get("anomalies", [])) if isinstance(v, dict) else 0
+                for v in all_anomalies.get("anomalies_by_technique", {}).values()
+            ) + len(all_anomalies.get("outliers", []))
+            seg_name = seg.get("name", f"seg_{i}")[:30]
+            print(f"    Segment {i} ({seg_name}): {len(seg_anomalies)} of {total_available} targets matched")
+
             for a in seg_anomalies:
                 t = a.get("type", "unknown")
                 anomaly_type_counts[t] = anomaly_type_counts.get(t, 0) + 1
@@ -378,6 +386,19 @@ class Orchestrator:
         self._collect_worker_stats(segment_workers)
         self._collect_worker_node_results(segment_workers)
         self._write_diagnostics(segment_workers)
+
+        # Deduplication check — how many observations cover the same pattern?
+        obs_fingerprints = {}
+        for nr in self.all_node_results:
+            for obs in nr.observations:
+                # Fingerprint by first 50 chars of evidence + source doc_id
+                fp = (obs.raw_evidence[:50].lower(), obs.source.doc_id)
+                if fp not in obs_fingerprints:
+                    obs_fingerprints[fp] = []
+                obs_fingerprints[fp].append(nr.node_id)
+        dupes = {fp: nodes for fp, nodes in obs_fingerprints.items() if len(nodes) > 1}
+        if dupes:
+            print(f"\n  Duplicate observations: {len(dupes)} patterns found by multiple nodes")
 
         # Root-level synthesis across all segments
         if len(segment_results) > 1 and self.budget.can_spend():
@@ -1581,7 +1602,7 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
             # Include if it matches scope OR if it has evidence (evidence-rich
             # anomalies are valuable even if scope match is imperfect — the
             # worker's _format_anomalies does the final entity-level filtering)
-            if _matches(a) or a.get("evidence"):
+            if _matches(a):
                 entry = {
                     "type": a.get("type", tech_key),
                     "description": a.get("description", ""),

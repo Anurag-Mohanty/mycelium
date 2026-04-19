@@ -306,8 +306,7 @@ class NpmRegistrySource(DataSource):
                 for line in f:
                     if line.strip():
                         records.append(_json.loads(line))
-                    if len(records) >= max_records:
-                        break
+            # Use the full catalog — no cap when loading from cache
             if records:
                 print(f"  [CATALOG] Loaded {len(records)} packages (cached)")
                 return records

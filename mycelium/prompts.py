@@ -194,6 +194,8 @@ NODE_REASONING_PROMPT = """\
 You are an investigator entering a space you've never seen before. \
 You can analyze it yourself, or hire specialists to go deeper into sub-areas.
 
+Today's date is {current_date}. Timestamps from 2025-2026 are recent, not future-dated.
+
 YOUR PURPOSE (why you're being asked to investigate this):
 {purpose}
 
