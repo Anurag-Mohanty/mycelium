@@ -66,18 +66,26 @@ class AnalyticalSurvey:
 
         # Find best text column (longest average content)
         text_col = None
+        best_avg = 0
         for col in text_cols:
             avg_len = df[col].fillna("").str.len().mean()
-            if avg_len > 20:
+            if avg_len > best_avg:
+                best_avg = avg_len
                 text_col = col
-                break
 
-        # Detect date columns
+        # Detect date columns — require string values containing date separators
         date_cols = []
         for col in df.columns:
+            if col in numeric_cols:
+                continue
             try:
                 sample = df[col].dropna().head(20)
-                if len(sample) > 0:
+                if len(sample) == 0:
+                    continue
+                # Must be strings containing date-like patterns (-, /, T)
+                str_sample = sample.astype(str)
+                has_date_chars = str_sample.str.contains(r'\d{4}[-/]\d{2}', regex=True).mean()
+                if has_date_chars > 0.5:
                     pd.to_datetime(sample)
                     date_cols.append(col)
             except Exception:
@@ -408,7 +416,9 @@ class AnalyticalSurvey:
         texts = df[text_col].fillna("").tolist()
 
         try:
-            vectorizer = TfidfVectorizer(max_features=1000, stop_words="english")
+            # token_pattern excludes pure numbers and very short tokens
+            vectorizer = TfidfVectorizer(max_features=1000, stop_words="english",
+                                         token_pattern=r'(?u)\b[a-zA-Z][a-zA-Z]{2,}\b')
             tfidf_matrix = vectorizer.fit_transform(texts)
         except Exception:
             return []
@@ -747,7 +757,8 @@ class AnalyticalSurvey:
         texts = df[text_col].fillna("").tolist()
         try:
             vectorizer = TfidfVectorizer(max_features=5000, stop_words="english",
-                                         ngram_range=(1, 2))
+                                         ngram_range=(1, 2),
+                                         token_pattern=r'(?u)\b[a-zA-Z][a-zA-Z]{2,}\b')
             tfidf_matrix = vectorizer.fit_transform(texts)
             feature_names = vectorizer.get_feature_names_out()
         except Exception:
@@ -862,7 +873,8 @@ class AnalyticalSurvey:
         texts = df[text_col].fillna("").tolist()
         try:
             vectorizer = TfidfVectorizer(max_features=3000, stop_words="english",
-                                         ngram_range=(1, 2))
+                                         ngram_range=(1, 2),
+                                         token_pattern=r'(?u)\b[a-zA-Z][a-zA-Z]{2,}\b')
             tfidf_matrix = vectorizer.fit_transform(texts)
             feature_names = vectorizer.get_feature_names_out()
         except Exception:

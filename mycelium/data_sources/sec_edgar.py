@@ -364,9 +364,18 @@ class SecEdgarSource(DataSource):
         """
         from collections import Counter
 
-        # Find top 50 companies by filing count
-        company_counts = Counter(f.get("company", "") for f in all_filings if f.get("company"))
-        top_companies = [name for name, _ in company_counts.most_common(50)]
+        # Find 50 interesting companies — skip trusts, receivables, and SPACs
+        # which file hundreds of identical boilerplate docs
+        skip_patterns = ("trust", "receivabl", "mortgage", "asset-backed",
+                         "acquisition corp", "certificate", "funding")
+        company_counts = Counter()
+        for f in all_filings:
+            name = f.get("company", "")
+            if name and not any(p in name.lower() for p in skip_patterns):
+                company_counts[name] += 1
+        # Pick companies with multiple filings (multi-year coverage)
+        top_companies = [name for name, count in company_counts.most_common(80)
+                         if count >= 2][:50]
 
         print(f"  [CATALOG] Enriching {len(top_companies)} companies with risk factor content...")
 
@@ -568,22 +577,32 @@ def _extract_risk_factors(html: str) -> str | None:
     text = html_mod.unescape(text)
     text = re.sub(r'\s+', ' ', text)
 
-    # Find ALL occurrences of "Item 1A" — we want the last substantial one
+    # Find ALL occurrences of "Item 1A" — pick the one followed by the most text
     pattern = re.compile(r'Item\s+1A[\.\s\-—:]+\s*Risk\s+Factors', re.IGNORECASE)
     matches = list(pattern.finditer(text))
 
     if not matches:
-        # Try broader pattern
         pattern2 = re.compile(r'ITEM\s+1A\b', re.IGNORECASE)
         matches = list(pattern2.finditer(text))
 
     if not matches:
         return None
 
-    # Use the LAST match — it's the actual section, not the TOC reference.
-    # If only one match, use it. If multiple, skip the first (TOC).
-    start_match = matches[-1] if len(matches) > 1 else matches[0]
-    start_pos = start_match.start()
+    # Pick the match whose content STARTS with actual prose, not a page number.
+    # TOC entries look like: "Item 1A. Risk Factors 5 Item 1B..."
+    # Actual sections look like: "Item 1A. Risk Factors The following..."
+    end_pattern = re.compile(r'Item\s+1B|Item\s+2[\.\s]+Prop', re.IGNORECASE)
+
+    best_match = matches[-1]  # default to last match
+    for m in matches:
+        # Check what comes after the header — if it's prose (not a number/page ref), it's the real section
+        after = text[m.end():m.end() + 100].strip()
+        # TOC entries have just a page number then next item; real sections have sentences
+        if len(after) > 20 and not after[0].isdigit() and "Item" not in after[:30]:
+            best_match = m
+            break
+
+    start_pos = best_match.start()
 
     # Find the end — "Item 1B" or "Item 2" AFTER the start
     end_patterns = [
