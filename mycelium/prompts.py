@@ -161,27 +161,59 @@ Respond ONLY with valid JSON, no other text.
 """
 
 
+ANOMALY_AGGREGATION_PROMPT = """\
+You are summarizing statistical anomalies into distinct patterns.
+
+ANOMALIES (numbered):
+{anomaly_list}
+
+Group these anomalies into distinct PATTERNS. Each pattern represents a \
+category of anomalies that share a common cause or mechanism. For each \
+pattern, provide a description and list the representative anomaly indices.
+
+Return ONLY a JSON object:
+{{
+    "patterns": [
+        {{
+            "name": "short pattern name",
+            "description": "what this pattern represents and why it matters",
+            "representative_indices": [0, 3, 7],
+            "anomaly_count": 15
+        }}
+    ]
+}}
+
+Rules:
+- Every anomaly should belong to exactly one pattern
+- Patterns should be meaningfully distinct — not just technique labels
+- Include the most informative anomalies as representatives (max 5 per pattern)
+- If an anomaly looks like a data artifact rather than real signal, note that in the description
+
+Respond ONLY with valid JSON, no other text.
+"""
+
+
 ANOMALY_ROUTING_PROMPT = """\
-You are routing statistical anomalies to an investigation segment.
+You are routing statistical anomaly patterns to an investigation segment.
 
 SEGMENT:
 Name: {segment_name}
 Scope: {segment_scope}
 Purpose: {segment_reasoning}
 
-AVAILABLE ANOMALIES (numbered):
-{anomaly_list}
+ANOMALY PATTERNS (from aggregation):
+{pattern_summary}
 
-Which of these anomalies are RELEVANT to this segment's scope and purpose? \
-An anomaly is relevant if the entities, fields, or patterns it describes \
+Which of these patterns are RELEVANT to this segment's scope and purpose? \
+A pattern is relevant if the entities, fields, or phenomena it describes \
 fall within what this segment will investigate.
 
-Be selective — only include anomalies this segment can actually investigate \
-with the data it will receive. If none are relevant, return an empty list.
+Be selective — only include patterns this segment can actually investigate. \
+If none are relevant, return an empty list.
 
 Return ONLY a JSON object:
 {{
-    "relevant_indices": [0, 3, 7],
+    "relevant_pattern_indices": [0, 2],
     "reasoning": "one sentence explaining your selection"
 }}
 

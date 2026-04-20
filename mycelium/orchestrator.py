@@ -33,7 +33,7 @@ from .synthesizer import synthesize
 from .validator import validate_finding
 from .significance import assess_significance
 from .impact import analyze_impact
-from .prompts import DEEP_DIVE_SELECTION_PROMPT, ANOMALY_ROUTING_PROMPT
+from .prompts import DEEP_DIVE_SELECTION_PROMPT, ANOMALY_ROUTING_PROMPT, ANOMALY_AGGREGATION_PROMPT
 from . import events
 from .knowledge_graph import KnowledgeGraph
 
@@ -313,10 +313,14 @@ class Orchestrator:
         self._segment_workers = segment_workers  # save ref for metrics
         all_anomalies = getattr(self, '_survey_anomalies', {})
 
-        # Route anomalies to segments via LLM — run all routing calls concurrently
-        print(f"\n  Routing anomalies to {len(segments)} segments (LLM reasoning)...")
+        # Phase 1: Aggregate anomalies into pattern summary (one LLM call)
+        # Phase 2: Route patterns to segments (one cheap LLM call per segment)
+        print(f"\n  Aggregating anomalies into patterns...")
+        flat_anomalies, pattern_summary = await self._aggregate_anomalies(all_anomalies)
+
+        print(f"  Routing patterns to {len(segments)} segments (LLM reasoning)...")
         routing_tasks = [
-            self._route_anomalies_to_segment(all_anomalies, seg)
+            self._route_patterns_to_segment(pattern_summary, flat_anomalies, seg)
             for seg in segments
         ]
         routed_results = await asyncio.gather(*routing_tasks, return_exceptions=True)
@@ -1378,14 +1382,8 @@ Respond ONLY with a JSON array."""}],
             json.dump(data, f, indent=2, default=str)
         print(f"\n  Tree saved to {tree_file}")
 
-    async def _route_anomalies_to_segment(self, all_anomalies: dict, segment: dict) -> list[dict]:
-        """Use LLM to decide which anomalies are relevant to a segment.
-
-        Replaces mechanical keyword matching. The LLM receives the segment's
-        scope/purpose and all anomalies, returns which ones belong.
-        On failure: returns empty list (explicit signal, not silent fallback).
-        """
-        # Flatten all anomalies into a numbered list
+    def _flatten_anomalies(self, all_anomalies: dict) -> list[dict]:
+        """Flatten survey anomaly dict into a list of uniform entries with evidence."""
         flat = []
 
         def _build_evidence(a: dict) -> dict:
@@ -1395,102 +1393,72 @@ Respond ONLY with a JSON array."""}],
             return {k: v for k, v in a.items() if k not in skip and v is not None}
 
         for outlier in all_anomalies.get("outliers", []):
-            field = outlier.get("field", "?")
-            value = outlier.get("value", "?")
-            z = outlier.get("z_score", "?")
-            direction = outlier.get("direction", "?")
-            record_id = outlier.get("record_id", "?")
             flat.append({
                 "type": "outlier",
-                "record": record_id,
-                "description": f"{record_id}: {field}={value} (z-score {z}, {direction})",
+                "record": outlier.get("record_id", "?"),
+                "description": f"{outlier.get('record_id', '?')}: {outlier.get('field', '?')}="
+                               f"{outlier.get('value', '?')} (z-score {outlier.get('z_score', '?')})",
                 "flagged_by": ["basic_statistics"],
-                "evidence": {"field": field, "value": value, "z_score": z, "direction": direction,
+                "evidence": {"field": outlier.get("field"), "value": outlier.get("value"),
+                             "z_score": outlier.get("z_score"), "direction": outlier.get("direction"),
                              "record_summary": outlier.get("record_summary", "")},
             })
-
         for combo in all_anomalies.get("unusual_combinations", []):
-            flat.append({
-                "type": "unusual_combination",
-                "description": combo.get("description", ""),
-                "flagged_by": ["keyword_signals"],
-                "evidence": {"description": combo.get("description", ""),
-                             "overrepresentation": combo.get("overrepresentation"),
-                             "count": combo.get("count")},
-            })
-
+            flat.append({"type": "unusual_combination", "description": combo.get("description", ""),
+                         "flagged_by": ["keyword_signals"],
+                         "evidence": {"description": combo.get("description", ""),
+                                      "overrepresentation": combo.get("overrepresentation")}})
         for conc in all_anomalies.get("concentrations", []):
-            flat.append({
-                "type": "concentration",
-                "description": (
-                    f"{conc.get('concentration_pct', '?')}% in top 3 values of {conc.get('field', '?')}"
-                    if conc.get("concentration_pct")
-                    else f"{conc.get('pct', '?')}% identical ({conc.get('dominant_value', '?')})"
-                ),
-                "flagged_by": ["entity_concentration"],
-                "evidence": {"field": conc.get("field", ""), "concentration_pct": conc.get("concentration_pct"),
-                             "dominant_value": conc.get("dominant_value", "")},
-            })
-
+            flat.append({"type": "concentration",
+                         "description": f"{conc.get('concentration_pct', '?')}% in {conc.get('field', '?')}",
+                         "flagged_by": ["entity_concentration"],
+                         "evidence": {"field": conc.get("field"), "concentration_pct": conc.get("concentration_pct"),
+                                      "dominant_value": conc.get("dominant_value", "")}})
         for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
                     "similarity_anomalies", "velocity_anomalies"):
             for a in all_anomalies.get(key, []):
-                flat.append({
-                    "type": a.get("type", "anomaly"),
-                    "description": a.get("description", ""),
-                    "record": a.get("entity", a.get("record", "")),
-                    "flagged_by": [key.replace("_anomalies", "")],
-                    "evidence": _build_evidence(a),
-                })
-
+                flat.append({"type": a.get("type", "anomaly"), "description": a.get("description", ""),
+                             "record": a.get("entity", a.get("record", "")),
+                             "flagged_by": [key.replace("_anomalies", "")],
+                             "evidence": _build_evidence(a)})
         for tech_key, tech_data in all_anomalies.get("anomalies_by_technique", {}).items():
             if not isinstance(tech_data, dict):
                 continue
             for a in tech_data.get("anomalies", []):
                 if not isinstance(a, dict):
                     continue
-                flat.append({
-                    "type": a.get("type", tech_key),
-                    "description": a.get("description", ""),
-                    "record": a.get("entity", a.get("record", "")),
-                    "flagged_by": [tech_key],
-                    "evidence": _build_evidence(a),
-                })
+                flat.append({"type": a.get("type", tech_key), "description": a.get("description", ""),
+                             "record": a.get("entity", a.get("record", "")),
+                             "flagged_by": [tech_key], "evidence": _build_evidence(a)})
+        return flat
 
+    async def _aggregate_anomalies(self, all_anomalies: dict) -> tuple[list[dict], str]:
+        """Aggregate anomalies into pattern clusters via one LLM call.
+
+        Returns (flat_anomaly_list, pattern_summary_text).
+        The pattern summary is what gets sent to per-segment routing calls.
+        """
+        flat = self._flatten_anomalies(all_anomalies)
         if not flat:
-            return []
+            return [], "No anomalies found."
 
-        # Format for LLM — compute how many fit in context
-        # Each anomaly is ~100-200 tokens as formatted text. Sonnet context is 200K.
-        # Reserve 2K for prompt + response. The rest is anomaly list.
-        # At ~150 tokens/anomaly, we can fit ~1300 anomalies. If we have more,
-        # we need to truncate — but derive the cap from the constraint.
-        sample = json.dumps(flat[0], default=str)
-        tokens_per_anomaly = len(sample) // 3  # rough: 3 chars per token
-        max_context_tokens = 180_000  # leave room for prompt + response
-        max_anomalies = max(50, max_context_tokens // max(1, tokens_per_anomaly))
-        anomalies_to_send = flat[:max_anomalies]
+        # Format numbered list — context-derived cap
+        sample_str = json.dumps(flat[0], default=str) if flat else "{}"
+        tokens_per = max(1, len(sample_str) // 3)
+        max_anomalies = max(50, 180_000 // tokens_per)
+        to_send = flat[:max_anomalies]
 
-        # Build numbered list for the prompt
         lines = []
-        for i, a in enumerate(anomalies_to_send):
-            desc = a.get("description", "")[:200]
-            record = a.get("record", "")
-            atype = a.get("type", "?")
-            lines.append(f"[{i}] [{atype}] {record}: {desc}")
+        for i, a in enumerate(to_send):
+            lines.append(f"[{i}] [{a.get('type', '?')}] {a.get('record', '')}: {a.get('description', '')[:150]}")
 
-        prompt = ANOMALY_ROUTING_PROMPT.format(
-            segment_name=segment.get("name", ""),
-            segment_scope=segment.get("scope_description", segment.get("name", "")),
-            segment_reasoning=segment.get("reasoning", ""),
-            anomaly_list="\n".join(lines),
-        )
+        prompt = ANOMALY_AGGREGATION_PROMPT.format(anomaly_list="\n".join(lines))
 
         try:
             client = anthropic.Anthropic()
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=1000,
+                max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
             )
             cost = (response.usage.input_tokens * 3 + response.usage.output_tokens * 15) / 1_000_000
@@ -1500,12 +1468,73 @@ Respond ONLY with a JSON array."""}],
             result = json.loads(output) if output.strip().startswith("{") else \
                 json.loads(output[output.find("{"):output.rfind("}") + 1])
 
-            indices = result.get("relevant_indices", [])
-            selected = [anomalies_to_send[i] for i in indices if 0 <= i < len(anomalies_to_send)]
+            patterns = result.get("patterns", [])
+            # Build human-readable summary for routing
+            summary_lines = []
+            for i, p in enumerate(patterns):
+                reps = p.get("representative_indices", [])
+                rep_descs = [to_send[j].get("description", "")[:80] for j in reps if 0 <= j < len(to_send)]
+                summary_lines.append(
+                    f"[{i}] {p.get('name', '?')} ({p.get('anomaly_count', '?')} anomalies): "
+                    f"{p.get('description', '')}\n    Examples: {'; '.join(rep_descs[:3])}"
+                )
+
+            pattern_summary = "\n".join(summary_lines)
+            print(f"  Aggregated {len(flat)} anomalies into {len(patterns)} patterns (${cost:.3f})")
+
+            # Store patterns with their representative anomalies for later extraction
+            self._aggregated_patterns = patterns
+            self._flat_anomalies = to_send
+            return flat, pattern_summary
+
+        except Exception as e:
+            print(f"  ⚠ Anomaly aggregation failed: {e}")
+            # Return raw summary as fallback
+            summary = f"{len(flat)} anomalies found across {len(set(a.get('type') for a in flat))} types."
+            return flat, summary
+
+    async def _route_patterns_to_segment(self, pattern_summary: str,
+                                          flat_anomalies: list[dict],
+                                          segment: dict) -> list[dict]:
+        """Route aggregated patterns to a segment via one cheap LLM call.
+
+        Receives the pre-computed pattern summary (not raw anomalies).
+        On failure: returns empty list.
+        """
+        prompt = ANOMALY_ROUTING_PROMPT.format(
+            segment_name=segment.get("name", ""),
+            segment_scope=segment.get("scope_description", segment.get("name", "")),
+            segment_reasoning=segment.get("reasoning", ""),
+            pattern_summary=pattern_summary,
+        )
+
+        try:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            cost = (response.usage.input_tokens * 3 + response.usage.output_tokens * 15) / 1_000_000
+            self.budget.record("overhead", cost)
+
+            output = response.content[0].text
+            result = json.loads(output) if output.strip().startswith("{") else \
+                json.loads(output[output.find("{"):output.rfind("}") + 1])
+
+            # Map pattern indices back to representative anomalies
+            pattern_indices = result.get("relevant_pattern_indices", [])
+            patterns = getattr(self, '_aggregated_patterns', [])
+            selected = []
+            for pi in pattern_indices:
+                if 0 <= pi < len(patterns):
+                    for ai in patterns[pi].get("representative_indices", []):
+                        if 0 <= ai < len(flat_anomalies):
+                            selected.append(flat_anomalies[ai])
             return selected
 
         except Exception as e:
-            print(f"    ⚠ LLM routing failed for segment '{segment.get('name', '?')}': {e}")
+            print(f"    ⚠ Pattern routing failed for '{segment.get('name', '?')}': {e}")
             return []
 
     def _write_run_metrics(self):
