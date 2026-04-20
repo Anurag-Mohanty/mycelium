@@ -1545,12 +1545,14 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
                 "type": "outlier",
                 "record": record_id,
                 "description": f"{record_id}: {field}={value} (z-score {z}, {direction})",
-                "field": field,
-                "value": value,
-                "z_score": z,
-                "direction": direction,
                 "flagged_by": ["basic_statistics"],
-                "summary": outlier.get("record_summary", ""),
+                "evidence": {
+                    "field": field,
+                    "value": value,
+                    "z_score": z,
+                    "direction": direction,
+                    "record_summary": outlier.get("record_summary", ""),
+                },
             })
 
     for combo in all_anomalies.get("unusual_combinations", []):
@@ -1558,41 +1560,54 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
             relevant.append({
                 "type": "unusual_combination",
                 "description": combo.get("description", ""),
-                "overrepresentation": combo.get("overrepresentation"),
                 "flagged_by": ["keyword_signals"],
+                "evidence": {
+                    "description": combo.get("description", ""),
+                    "overrepresentation": combo.get("overrepresentation"),
+                    "count": combo.get("count"),
+                },
             })
 
     for conc in all_anomalies.get("concentrations", []):
         if _matches(conc):
             relevant.append({
                 "type": "concentration",
-                "field": conc.get("field", "?"),
                 "description": (
                     f"{conc.get('concentration_pct', '?')}% in top 3 values of {conc.get('field', '?')}"
                     if conc.get("concentration_pct")
                     else f"{conc.get('pct', '?')}% identical ({conc.get('dominant_value', '?')})"
                 ),
                 "flagged_by": ["entity_concentration"],
+                "evidence": {
+                    "field": conc.get("field", ""),
+                    "concentration_pct": conc.get("concentration_pct"),
+                    "dominant_value": conc.get("dominant_value", ""),
+                    "top_values": conc.get("top_values", []),
+                },
             })
 
-    # Other anomaly categories from the survey
+    # Other anomaly categories + anomalies_by_technique — build evidence from
+    # whatever fields the technique provided beyond the minimum identifiers
+    def _build_evidence(a: dict) -> dict:
+        """Extract evidence from any anomaly dict, regardless of technique."""
+        if "evidence" in a:
+            return a["evidence"]
+        # Build from all non-identifier fields
+        skip = {"type", "description", "record", "entity", "flagged_by", "indices"}
+        return {k: v for k, v in a.items() if k not in skip and v is not None}
+
     for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
                 "similarity_anomalies", "velocity_anomalies"):
         for a in all_anomalies.get(key, []):
             if _matches(a):
-                entry = {
+                relevant.append({
                     "type": a.get("type", "anomaly"),
                     "description": a.get("description", ""),
                     "record": a.get("entity", a.get("record", "")),
                     "flagged_by": [key.replace("_anomalies", "")],
-                }
-                if "evidence" in a:
-                    entry["evidence"] = a["evidence"]
-                relevant.append(entry)
+                    "evidence": _build_evidence(a),
+                })
 
-    # ALL anomaly types from anomalies_by_technique — these have the richest evidence
-    # (temporal_text has terms_added/removed, peer_divergence has peer comparisons)
-    # Pass them ALL — the worker's _format_anomalies filters to fetched documents
     survey_techniques = all_anomalies.get("anomalies_by_technique", {})
     for tech_key, tech_data in survey_techniques.items():
         if not isinstance(tech_data, dict):
@@ -1600,18 +1615,13 @@ def _filter_anomalies(all_anomalies: dict, scope_description: str,
         for a in tech_data.get("anomalies", []):
             if not isinstance(a, dict):
                 continue
-            # Include if it matches scope OR if it has evidence (evidence-rich
-            # anomalies are valuable even if scope match is imperfect — the
-            # worker's _format_anomalies does the final entity-level filtering)
             if _matches(a):
-                entry = {
+                relevant.append({
                     "type": a.get("type", tech_key),
                     "description": a.get("description", ""),
                     "record": a.get("entity", a.get("record", "")),
                     "flagged_by": [tech_key],
-                }
-                if "evidence" in a:
-                    entry["evidence"] = a["evidence"]
-                relevant.append(entry)
+                    "evidence": _build_evidence(a),
+                })
 
-    return relevant[:50]  # larger cap to include evidence-rich anomalies
+    return relevant[:50]
