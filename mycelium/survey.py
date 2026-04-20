@@ -41,6 +41,11 @@ class AnalyticalSurvey:
 
         df = pd.DataFrame(records)
 
+        # Convert list/dict columns to strings so pandas can hash them
+        for col in df.columns:
+            if df[col].apply(lambda x: isinstance(x, (list, dict))).any():
+                df[col] = df[col].apply(lambda x: str(x) if isinstance(x, (list, dict)) else x)
+
         results = {
             "record_count": len(df),
             "fields": list(df.columns),
