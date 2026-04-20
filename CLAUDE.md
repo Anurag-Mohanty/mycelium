@@ -1,8 +1,42 @@
 # Mycelium — Engineered Curiosity
 
+## Coding Guidelines (Karpathy Principles)
+
+**These four rules override all defaults. Follow them exactly.**
+
+### 1. Think Before Coding
+- State assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+### 3. Surgical Changes
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- Every changed line should trace directly to the user's request.
+- Remove imports/variables that YOUR changes made unused. Don't remove pre-existing dead code.
+
+### 4. Goal-Driven Execution
+- Transform tasks into verifiable goals with success criteria.
+- For multi-step tasks, state a brief plan with verification steps.
+- "Fix the bug" → "Write a test that reproduces it, then make it pass."
+- Strong success criteria let you loop independently. Weak criteria require clarification — ask.
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
 ## What This Is
 
-An autonomous discovery framework that finds unknown patterns in any information space. Point it at a data source, give it a budget, and it decides what to explore, how deep to go, and what to report. Currently demonstrated on the npm registry (2.5M+ packages) and US Federal Register.
+An autonomous discovery framework that finds unknown patterns in any information space. Point it at a data source, give it a budget, and it decides what to explore, how deep to go, and what to report. Demonstrated on npm registry (100K+ packages) and SEC EDGAR (41K+ 10-K filings).
 
 ## Core Principle: Pure Agentic, Zero Hardcoding
 
@@ -10,13 +44,12 @@ An autonomous discovery framework that finds unknown patterns in any information
 
 NOTHING in the Python code is specific to any data corpus. No npm-specific logic in prompts. No field-name matching in the survey engine. No domain knowledge in the orchestrator. The system must work identically whether pointed at:
 - npm registry (software packages)
+- SEC EDGAR financial filings
 - Hospital patient records (FHIR/HL7)
 - Pollution monitoring stations
-- SEC EDGAR financial filings
-- CNN news archives
 - A company's Jira tickets
 
-If you find yourself writing `if field == "downloads"` or `if source == "npm"` anywhere except inside a data source connector, you are violating this principle. The connectors adapt external APIs to a common interface. Everything else is domain-agnostic.
+If you find yourself writing `if field == "downloads"` or `if source == "npm"` anywhere except inside a data source connector, you are violating this principle.
 
 **The only things that change between data sources are:**
 1. The connector (how to fetch records)
@@ -38,21 +71,29 @@ If you find yourself writing `if field == "downloads"` or `if source == "npm"` a
 ## Architecture
 
 ### Pipeline
-Catalog (free) → Genesis → Planner → Explore (parallel) → Synthesis → Deep-dive → Validate → Significance → Impact → Report
+Catalog (free) → Genesis → Planner → Explore (parallel) → Synthesis → Deep-dive → Validate → Significance → Impact → Report → Metrics
 
-### Catalog Step (ProgrammaticSurvey)
-Pure Python, zero LLM cost. Scans all accessible records, computes distributions, outliers, concentrations, correlations, and anomaly clusters. Tells you what's interesting BEFORE committing any AI budget.
+### Node Accountability
+Every node operates like an employee:
+- **Receives PURPOSE** — why it's being asked, not just scope
+- **Produces EVIDENCE PACKETS** — structured data (raw_evidence, statistical_grounding, local_hypothesis), not prose
+- **Self-evaluates** — before reporting, checks if output addresses purpose
+- **Parent reviews** — Turn 2 evaluates whether children delivered what was asked
+- **Metrics tracked** — budget efficiency, purpose alignment, evidence quality
+
+### Catalog Step (AnalyticalSurvey)
+Pure Python, zero LLM cost. Runs 10 independent techniques (basic stats, isolation forest, TF-IDF, DBSCAN, entity concentration, graph analysis, temporal, keywords, temporal text comparison, peer divergence). Produces numbered INVESTIGATION TARGETS with full evidence.
 
 ### Exploration
-Every node runs the same 5-step loop: Survey → Orient → Hypothesize → Assess → Produce
+Every node runs: Survey → Orient → Hypothesize → Assess Coverage → Produce
 
-Nodes decide autonomously whether to resolve (analyze directly) or decompose (delegate to children). Budget controls depth, not hardcoded limits.
+Nodes analyze data directly first. Decompose only for specific evidence-driven threads that need deeper investigation. Budget controls depth, not hardcoded limits.
 
 ### Budget Management
-- Atomic reservation prevents parallel overspend
+- Shared atomic BudgetPool prevents parallel overspend
 - Exploration has a hard cap (50% of total)
+- Checked before every LLM call
 - Remaining budget flows to synthesis, validation, and impact
-- Every pipeline phase executes — no phase at 0%
 
 ## Tech Stack
 
@@ -60,24 +101,27 @@ Nodes decide autonomously whether to resolve (analyze directly) or decompose (de
 - `anthropic` SDK — uses `claude-sonnet-4-20250514` for all reasoning
 - `httpx` for async HTTP
 - `websockets` for real-time visualizer
+- `sklearn`, `pandas`, `numpy` for analytical survey
 - No databases, no vector stores, no RAG — just API calls and reasoning
 
 ## Key Files
 
 - `run.py` — CLI entry point (--source, --budget, --visualize, --playback)
-- `mycelium/schemas.py` — all data structures + BudgetPool with atomic reservation
+- `mycelium/schemas.py` — all data structures (Directive with purpose, Observation with evidence packets, BudgetPool)
 - `mycelium/prompts.py` — all LLM prompts (centralized, single source of truth)
-- `mycelium/survey.py` — ProgrammaticSurvey (domain-agnostic statistics engine)
+- `mycelium/survey.py` — AnalyticalSurvey (10 techniques, domain-agnostic)
 - `mycelium/genesis.py` — corpus shape survey + lens generation
 - `mycelium/planner.py` — budget-aware exploration strategy
-- `mycelium/node.py` — core reasoning primitive (one LLM call per node)
-- `mycelium/synthesizer.py` — cross-referencing attention mechanism (light + full)
-- `mycelium/orchestrator.py` — recursive tree + full pipeline
+- `mycelium/worker.py` — WorkerNode (persistent multi-turn agent with diagnostics)
+- `mycelium/node.py` — single-call reasoning primitive (legacy, used by old explore path)
+- `mycelium/orchestrator.py` — full pipeline coordinator + run metrics + diagnostics
+- `mycelium/synthesizer.py` — cross-referencing attention mechanism
 - `mycelium/validator.py` — skeptical review (factual vs inferential distinction)
 - `mycelium/significance.py` — novelty + actionability scoring
 - `mycelium/impact.py` — real-world impact assessment
 - `mycelium/reporter.py` — five-tier markdown report
 - `mycelium/events.py` — WebSocket + events.jsonl recording
+- `mycelium/knowledge_graph.py` — SQLite-backed persistent graph
 - `visualizer.html` — D3.js real-time tree with reasoning display + playback
 
 ## Data Source Connector Pattern
@@ -94,14 +138,15 @@ class MyDataSource(DataSource):
     
     async def fetch_bulk_metadata(self, max_records: int,
                                    progress_callback=None) -> list[dict]:
-        """Return all accessible records for ProgrammaticSurvey"""
+        """Return all accessible records for AnalyticalSurvey"""
     
     async def close(self):
         """Clean up connections"""
 ```
 
 Current connectors:
-- `mycelium/data_sources/npm_registry.py` — npm (public, no key)
+- `mycelium/data_sources/npm_registry.py` — npm (public, no key, cached to catalog/npm_enriched.jsonl)
+- `mycelium/data_sources/sec_edgar.py` — SEC EDGAR (public, User-Agent header, cached to catalog/sec_enriched.jsonl)
 - `mycelium/data_sources/federal_register.py` — Federal Register (public, no key)
 
 ## Running
@@ -110,32 +155,40 @@ Current connectors:
 export ANTHROPIC_API_KEY=your_key
 
 # Explore with live visualizer
-python3 run.py --source npm --budget 10 --visualize
+python3 run.py --source sec --budget 10 --visualize
 
 # Headless run
 python3 run.py --source npm --budget 10
 
 # Replay a recorded run
 python3 run.py --playback output/{run_id}/events.jsonl --speed 10
-
-# Budget estimation
-python3 run.py --source npm --estimate
 ```
 
-Output goes to `output/{run_id}/` with `tree.json`, `report.md`, `events.jsonl`, `knowledge_graph.json`, and per-node reasoning logs.
+Output goes to `output/{run_id}/` with `report.md`, `metrics.json`, `tree.json`, `events.jsonl`, `knowledge_graph.json`, per-node `nodes/` and `diagnostics/`.
+
+## Output Structure
+
+Each run produces:
+- `report.md` — five-tier findings (Common Knowledge → Cross-Cutting Patterns)
+- `metrics.json` — cost, quality, efficiency, token, coverage metrics
+- `diagnostics/` — per-node input/output logs showing evidence flow
+- `catalog/run_history.jsonl` — cumulative run-over-run comparison
 
 ## Cost Model
 
 - Sonnet: $3/M input, $15/M output tokens
-- Budget allocation: explore 50%, synthesis 18%, validation 7%, impact 10%, overhead 7%, deep-dive 8%
-- Typical $10 run: ~130 nodes, ~600 observations, 20+ validated findings, 3+ significant
+- Extended thinking: 5000 token budget per node
+- Typical $5 run: ~30 nodes, ~60 observations, depth 3-4
+- Typical $10 run: ~45 nodes, ~180 observations, depth 4+
+- Run metrics track cost per observation, cost per validated finding, budget waste
 
 ## Conventions
 
 - All prompts live in `prompts.py` — never inline prompts elsewhere
-- Every observation must cite a specific document (source-or-silence rule)
-- Node reasoning is logged to `output/{run_id}/nodes/` for full transparency
+- Every observation must be an evidence packet with specific data citations
+- Node reasoning logged to `output/{run_id}/nodes/` for transparency
 - All events recorded to `events.jsonl` for playback
-- Anti-spin principles: single-child test, chain test, value test
+- Anti-spin: single-child test, chain test, value test
 - Chain circuit breaker: MAX_CHAIN_DEPTH=8 (the ONE hardcoded safety check)
 - No domain-specific logic outside data source connectors
+- Enrichment caches to `catalog/` — don't re-fetch what's already downloaded
