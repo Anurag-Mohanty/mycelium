@@ -492,6 +492,17 @@ class Orchestrator:
         # Compute and save run metrics
         self._write_run_metrics()
 
+        # Generate transcripts and dashboard
+        try:
+            import subprocess
+            subprocess.run(
+                ["python3", "build_transcripts.py", self.run_id],
+                capture_output=True, timeout=30,
+            )
+            print(f"  Transcripts: output/{self.run_id}/transcripts/")
+        except Exception:
+            pass  # transcript generation is optional
+
         if self.visualize:
             await asyncio.sleep(2)  # let final events reach the browser
             await events.stop_server()
