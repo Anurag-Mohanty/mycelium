@@ -384,9 +384,8 @@ Produce a JSON object with this exact structure:
         {{
             "scope_description": "what this child should investigate and the SPECIFIC evidence that triggered it",
             "purpose": "WHY this child is needed — what you need from this investigation and how it fits into your broader analysis",
-            "filters": {{
-                "keyword": "search term or category",
-                "packages": ["specific_item_1", "specific_item_2"]
+            "data_filter": {{
+                "use ONLY parameter names from the DATA SOURCE FILTER SCHEMA above": "with values that will match actual records you saw in your data"
             }},
             "parent_context": "the exact evidence packet that motivated this child",
             "hypothesis": "what you suspect the child will find"

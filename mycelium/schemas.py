@@ -33,6 +33,7 @@ class Directive:
     lenses: list[str]
     parent_context: Optional[str]
     purpose: str = ""  # WHY this node is being asked — what the parent needs from it
+    data_filter: dict = field(default_factory=dict)  # structured filter matching data source schema
     node_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     parent_id: Optional[str] = None
     tree_position: str = "ROOT"

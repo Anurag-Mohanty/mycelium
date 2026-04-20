@@ -122,15 +122,21 @@ class WorkerNode:
             child_budget = cd.get("budget", child_budget_each)
             child_budget = min(child_budget, remaining_for_children / max(1, n_children - i + 1))
 
+            # Use structured data_filter if LLM produced one; otherwise inherit parent's
+            child_data_filter = cd.get("data_filter", {})
+            if not child_data_filter or not isinstance(child_data_filter, dict):
+                child_data_filter = self.directive.data_filter or self.directive.scope.filters
+
             child_directive = Directive(
                 scope=Scope(
                     source=self.directive.scope.source,
-                    filters={**self.directive.scope.filters, **cd.get("filters", {})},
+                    filters=child_data_filter,
                     description=cd.get("scope_description", ""),
                 ),
                 lenses=self.lenses,
                 parent_context=cd.get("parent_context", ""),
                 purpose=cd.get("purpose", cd.get("hypothesis", "")),
+                data_filter=child_data_filter,
                 node_id=str(uuid.uuid4()),
                 parent_id=self.node_id,
                 tree_position=f"{self.pos}.{i}" if self.pos != "ROOT" else str(i),
@@ -215,9 +221,11 @@ class WorkerNode:
     async def _turn_initial(self) -> dict | None:
         """First LLM call: survey the data, produce observations, decide to delegate."""
 
-        # Validate filters against data source schema before fetching
+        # Use data_filter if available, otherwise scope.filters
+        filters = dict(self.directive.data_filter or self.directive.scope.filters)
+
+        # Validate against data source schema
         schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
-        filters = dict(self.directive.scope.filters)
         if schema and filters:
             valid_params = set(schema.keys())
             unknown = [k for k in filters if k not in valid_params]
@@ -225,12 +233,18 @@ class WorkerNode:
                 self._log(f"Filter validation: unknown params {unknown} removed")
                 filters = {k: v for k, v in filters.items() if k in valid_params}
 
-        # Fetch data — no retry heuristics. If filter produces 0 records,
-        # the node resolves with 0 records and self-eval states what happened.
-        # The parent's Turn 2 decides whether to respawn with a different filter.
+        # Fetch data
         documents = await self.data_source.fetch(filters, max_results=100)
 
         if not documents:
+            # Explicit signal: filter was valid but returned zero records.
+            # Store diagnostic so parent's Turn 2 can see this and decide.
+            self._diagnostics["fetch_result"] = {
+                "filter_used": filters,
+                "filter_validated": True,
+                "records_returned": 0,
+                "reason": "filter returned zero records from data source",
+            }
             return None
 
         # Chain circuit breaker
