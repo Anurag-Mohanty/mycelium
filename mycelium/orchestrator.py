@@ -1110,8 +1110,64 @@ Respond ONLY with a JSON array."""}],
             print(f"    Position: {w['tree_position']}")
             print(f"    Purpose: {w['purpose'][:100]}")
             print(f"    Data: {w['data_received'].get('record_count', 0)} records")
-            print(f"    Targets: {w['anomaly_targets_received']['count']} anomalies")
+            print(f"    Targets: {w.get('anomaly_targets_received', {}).get('count', 0)} anomalies")
         print(f"  {'═'*54}")
+
+        # Write full_diagnostic.txt with every node's input/output
+        full_path = self.run_dir / "full_diagnostic.txt"
+        with open(full_path, "w") as f:
+            f.write(f"{'='*70}\n")
+            f.write(f"RUN {self.run_id} — FULL NODE DIAGNOSTIC\n")
+            f.write(f"{'='*70}\n")
+            f.write(f"Nodes: {total} | Zero-obs: {zero_obs} | With evidence: {targets_with_evidence}\n")
+            f.write(f"Decomposed: {decomposed} | Self-eval gaps: {gaps_flagged}\n")
+            f.write(f"Observations: {total_obs} ({evidence_cited} citing evidence)\n\n")
+
+            for d in all_diags:
+                f.write(f"{'─'*70}\n")
+                f.write(f"NODE {d['tree_position']} [{d['decision'].upper()}] ${d['budget']['spent']:.3f}\n")
+                f.write(f"{'─'*70}\n")
+                f.write(f"SCOPE: {d['scope']}\n")
+                f.write(f"PURPOSE: {d['purpose']}\n")
+                f.write(f"DATA: {d.get('data_received', {}).get('record_count', 0)} records\n")
+                tgts = d.get('anomaly_targets_received', {})
+                tc = tgts.get('count', 0)
+                te = sum(1 for t in tgts.get('targets', []) if t.get('has_evidence'))
+                f.write(f"TARGETS: {tc} ({te} with evidence)\n")
+                for t in tgts.get('targets', [])[:5]:
+                    ev = " [+evidence]" if t.get("has_evidence") else ""
+                    f.write(f"  [{t.get('type','?')}] {t.get('description','')[:120]}{ev}\n")
+                if tc > 5:
+                    f.write(f"  ... and {tc - 5} more\n")
+
+                se = d.get('self_evaluation') or {}
+                f.write(f"SELF-EVAL: addressed={se.get('purpose_addressed')} | "
+                        f"quality={se.get('evidence_quality')} | "
+                        f"gap={str(se.get('purpose_gap',''))[:120]}\n")
+
+                # Load observations from node file
+                nid = d['node_id']
+                node_file = self.run_dir / "nodes" / f"{nid[:8]}.json"
+                try:
+                    with open(node_file) as nf:
+                        node_data = json.load(nf)
+                    obs_list = node_data.get("observations", [])
+                    f.write(f"OUTPUT: {len(obs_list)} observations, {d['output']['children_spawned']} children\n")
+                    for i, obs in enumerate(obs_list, 1):
+                        raw = obs.get("raw_evidence", obs.get("what_i_saw", ""))
+                        grounding = obs.get("statistical_grounding", "")
+                        hypothesis = obs.get("local_hypothesis", obs.get("reasoning", ""))
+                        src = obs.get("source", {})
+                        src_id = src.get("doc_id", src.get("title", "?")) if isinstance(src, dict) else str(src)[:30]
+                        f.write(f"  [{i}] {obs.get('observation_type', '?')} | src: {src_id}\n")
+                        f.write(f"      EVIDENCE: {str(raw)[:250]}\n")
+                        if grounding:
+                            f.write(f"      GROUNDING: {str(grounding)[:200]}\n")
+                        if hypothesis:
+                            f.write(f"      HYPOTHESIS: {str(hypothesis)[:200]}\n")
+                except FileNotFoundError:
+                    f.write(f"  (no node file)\n")
+                f.write("\n")
 
     def _worker_result_to_node_result(self, result: dict) -> NodeResult:
         """Convert a WorkerNode result dict to a NodeResult for synthesis."""
