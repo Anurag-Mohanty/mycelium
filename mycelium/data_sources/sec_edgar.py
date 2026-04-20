@@ -373,12 +373,7 @@ class SecEdgarSource(DataSource):
         enriched = await self._enrich_top_companies(all_filings, progress_callback)
         if enriched:
             self._enriched_filings = enriched
-            # Save to cache for future runs
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "w") as f:
-                for r in enriched:
-                    f.write(_json.dumps(r, default=str) + "\n")
-            print(f"  [CATALOG] Saved enrichment cache to {cache_path}")
+            # Cache already saved by _enrich_top_companies (streaming writes)
             return enriched
 
         return all_filings[:max_records]
@@ -437,10 +432,16 @@ class SecEdgarSource(DataSource):
         print(f"  [CATALOG] Enriching {total} filings from {total_companies} companies "
               f"(max {max_filings_per_company}/company, SPVs filtered)...")
 
-        enriched = []
+        import json as _json
+        from pathlib import Path as _Path
+        cache_path = _Path("catalog/sec_enriched.jsonl")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        enriched_count = 0
         extraction_attempts = 0
         extraction_successes = 0
         enrich_start = _time.time()
+        cache_file = open(cache_path, "w")  # stream writes
 
         # First, get submissions (SIC codes) for all unique CIKs
         # This is needed for SIC data — batch by unique CIK
@@ -455,31 +456,27 @@ class SecEdgarSource(DataSource):
         for i, cik in enumerate(unique_ciks):
             submissions = await self._get_submissions(cik)
             if submissions:
+                # Extract primary doc mapping now — don't keep full submissions in memory
+                recent = submissions.get("filings", {}).get("recent", {})
+                acc_list = recent.get("accessionNumber", [])
+                pdoc_list = recent.get("primaryDocument", [])
+                pdocs = {}
+                for j in range(min(len(acc_list), len(pdoc_list))):
+                    if acc_list[j] and pdoc_list[j]:
+                        pdocs[acc_list[j]] = pdoc_list[j]
                 cik_metadata[cik] = {
                     "name": submissions.get("name", ""),
                     "sic": submissions.get("sic", ""),
                     "sic_description": submissions.get("sicDescription", ""),
-                    "_submissions": submissions,  # keep full data for primary doc lookup
+                    "_primary_docs": pdocs,
                 }
             if (i + 1) % 200 == 0:
                 elapsed = _time.time() - enrich_start
                 print(f"  [CATALOG] Metadata: {i + 1}/{len(unique_ciks)} companies ({elapsed:.0f}s)")
 
-        # Build a map of CIK -> {accession -> primaryDocument} from submissions
-        # This avoids a separate index-page request per filing
-        cik_primary_docs = {}  # cik -> {accession -> primary_doc_filename}
-        for cik, meta in cik_metadata.items():
-            cik_primary_docs[cik] = {}
-        for cik in unique_ciks:
-            subs = cik_metadata.get(cik, {}).get("_submissions", {})
-            recent = subs.get("filings", {}).get("recent", {})
-            accessions = recent.get("accessionNumber", [])
-            primary_docs = recent.get("primaryDocument", [])
-            mapping = {}
-            for j in range(min(len(accessions), len(primary_docs))):
-                if accessions[j] and primary_docs[j]:
-                    mapping[accessions[j]] = primary_docs[j]
-            cik_primary_docs[cik] = mapping
+        # Primary doc mapping already extracted during metadata fetch
+        cik_primary_docs = {cik: meta.get("_primary_docs", {})
+                            for cik, meta in cik_metadata.items()}
 
         print(f"  [CATALOG] Fetching filing documents...")
 
@@ -544,7 +541,7 @@ class SecEdgarSource(DataSource):
 
             extraction_successes += 1
             meta = cik_metadata.get(cik, {})
-            enriched.append({
+            record = {
                 "id": f"{cik}/{accession}",
                 "title": f"{meta.get('name', company_name)} — 10-K ({date_filed})",
                 "type": "sec_filing",
@@ -560,30 +557,44 @@ class SecEdgarSource(DataSource):
                 "risk_factors_text": risk_factors,
                 "risk_factors_length": len(risk_factors),
                 "risk_factors_word_count": len(risk_factors.split()),
-            })
+            }
+            # Stream to disk — don't accumulate in memory
+            cache_file.write(_json.dumps(record, default=str) + "\n")
+            cache_file.flush()
+            enriched_count += 1
 
             if progress_callback:
                 progress_callback({
-                    "fetched": len(enriched),
+                    "fetched": enriched_count,
                     "total_estimated": total,
                     "phase": "enriching_content",
                 })
 
-            if (i + 1) % 100 == 0:
+            if (i + 1) % 200 == 0:
                 elapsed = _time.time() - enrich_start
                 rate = (i + 1) / elapsed if elapsed > 0 else 0
                 eta = (total - i - 1) / rate / 60 if rate > 0 else 0
                 success_pct = extraction_successes / max(1, extraction_attempts) * 100
                 print(f"  [CATALOG] {i + 1}/{total} filings, "
-                      f"{len(enriched)} enriched ({success_pct:.0f}% extraction), "
-                      f"{elapsed:.0f}s elapsed, ~{eta:.1f}min remaining")
+                      f"{enriched_count} enriched ({success_pct:.0f}% extraction), "
+                      f"{elapsed:.0f}s elapsed, ~{eta:.1f}min remaining",
+                      flush=True)
 
+        cache_file.close()
         elapsed = _time.time() - enrich_start
         success_pct = extraction_successes / max(1, extraction_attempts) * 100
-        companies_enriched = len(set(r["company"] for r in enriched))
-        print(f"  [CATALOG] Enriched {len(enriched)} filings from {companies_enriched} companies. "
+        print(f"  [CATALOG] Enriched {enriched_count} filings. "
               f"Enrichment time: {elapsed / 60:.1f} minutes. "
-              f"Extraction success rate: {success_pct:.0f}%.")
+              f"Extraction success rate: {success_pct:.0f}%.",
+              flush=True)
+        print(f"  [CATALOG] Saved to {cache_path}", flush=True)
+
+        # Load from disk for return — the cache IS the data now
+        enriched = []
+        with open(cache_path) as f:
+            for line in f:
+                if line.strip():
+                    enriched.append(_json.loads(line))
         return enriched
 
     async def close(self):
