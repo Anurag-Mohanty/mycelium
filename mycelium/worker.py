@@ -178,11 +178,15 @@ class WorkerNode:
                 # Collect synthesis findings
                 self.findings = turn2.get("findings", [])
 
-                # Handle follow-up children
+                # Honor the LLM's continue/resolve decision
+                decision = turn2.get("continue_or_resolve", "resolve")
                 followups = turn2.get("followup_children", [])
-                if followups and self.surplus > 0.05:
+                if decision == "continue" and followups and self.surplus > 0.05:
                     self._log(f"Spawning {len(followups)} follow-up investigations")
                     await self._run_followups(followups)
+                elif followups:
+                    reasoning = turn2.get("continue_reasoning", "resolving with current evidence")
+                    self._log(f"RESOLVING (LLM decided): {reasoning[:80]}")
 
                 # Emit synthesis events
                 for f in self.findings:
@@ -661,14 +665,34 @@ purpose? What did one worker find that changes the meaning of another's findings
 
 3. EVALUATE: Which findings are strongest? Which workers found rich veins vs dead ends?
 
-4. RESOURCE DECISION: You have ${budget_remaining:.2f} left. Options:
-   a) Spawn follow-up workers to trace specific findings deeper
-   b) Return surplus to your manager (if coverage is sufficient)
+4. CONTINUE OR RESOLVE: Before deciding to spawn more workers, honestly assess: \
+given what my children just returned, does the accumulated evidence justify \
+continuing to decompose this line of investigation?
 
-5. FINDINGS: What cross-cutting findings emerge from synthesizing all workers' observations?
+Consider:
+- How many of my children returned substantive observations with specific evidence?
+- How many returned zero records or zero observations?
+- How many self-evaluated as having gaps — unable to address their purpose?
+- Is there a specific thread with strong evidence that would benefit from \
+one more level of depth? Or am I chasing data that can't be fetched?
+
+If most children returned empty or low-signal results, RESOLVE with what you have. \
+Synthesize the evidence that exists and return it. Do not spawn more children \
+hoping the next level will find what this level couldn't.
+
+Only spawn follow-up children if: a specific child returned STRONG evidence that \
+opens a concrete new question, AND you have budget to pursue it.
+
+5. RESOURCE DECISION: You have ${budget_remaining:.2f} left. Based on your assessment above:
+   a) If continuing: spawn follow-up workers for SPECIFIC strong evidence threads only
+   b) If resolving: return surplus to your manager
+
+6. FINDINGS: What cross-cutting findings emerge from synthesizing all workers' observations?
 
 Return JSON:
 {{
+    "continue_or_resolve": "continue | resolve",
+    "continue_reasoning": "one sentence: why you are continuing to decompose OR why you are resolving with current evidence",
     "worker_reviews": [
         {{
             "worker_scope": "what this worker was asked to investigate",
