@@ -935,3 +935,145 @@ RULES:
 - Include validation verdicts and impact assessments for all Tier 3-5 findings.
 - Tier 1 findings build credibility — if these are wrong, everything above is suspect.
 """
+
+
+TURN2_REVIEW_PROMPT = """\
+Your workers have reported back. Review their results and decide what to do next.
+
+YOUR ORIGINAL OBSERVATIONS:
+{my_observations}
+
+WORKER REPORTS:
+{children_reports}
+
+BUDGET STATUS:
+  Your remaining budget: ${budget_remaining:.2f}
+  Your total allocation: ${total_budget:.2f}
+
+Now reason through the following steps IN ORDER:
+
+────────────────────────────────────────────────────
+STEP 1 — SUMMARIZE EACH CHILD'S OUTPUT
+
+For each worker, state:
+- What it was asked to do (its purpose)
+- What it returned: observation count, key evidence, self-evaluation
+- Whether it flagged gaps or capability limits
+- Whether it returned zero records (data fetch failure)
+
+────────────────────────────────────────────────────
+STEP 2 — CHOOSE ONE OPTION
+
+Based on your summary, choose EXACTLY ONE:
+
+OPTION A: RESOLVE
+The children collectively produced sufficient evidence to synthesize \
+a finding for this line of investigation. No further decomposition \
+needed. Synthesize what's there and return it.
+
+OPTION B: SPAWN MORE CHILDREN ON THE CURRENT LINE
+The children's failure was scope (too broad, too narrow) or specificity \
+(question was unclear). A different child formulation might succeed. \
+You MUST name what was wrong with the previous children's framing and \
+how a new formulation would avoid the same failure. If you cannot \
+articulate this, choose A or C instead.
+
+OPTION C: PIVOT
+The children consistently flagged the SAME capability limit — data \
+availability, tool access, or scope outside the data source's reach. \
+More children on the current line will hit the same limit. \
+Reason about what the children DID learn (even while flagging gaps) \
+and whether an adjacent investigation is answerable with available data. \
+If yes, spawn children on the pivoted line. If no, resolve and flag the \
+capability gap upward.
+
+KEY PRINCIPLE: A consistent pattern of children flagging the SAME gap \
+(e.g., multiple children all saying "I need data this source doesn't have") \
+is strong evidence for Option C, not Option B. More children with the same \
+data access will hit the same gap.
+
+────────────────────────────────────────────────────
+STEP 3 — IDENTIFY ADJACENT FINDINGS
+
+Examine the children's observations for ADJACENT FINDINGS — things a child \
+noticed that are OUTSIDE its assigned scope but potentially valuable.
+
+An adjacent finding looks like: "I was asked about X, could not fully \
+address it, but while looking at the data I noticed Y, which relates to \
+[some other area]."
+
+For EACH adjacent finding, choose ONE action:
+
+ACTION 1 — SPAWN A NEW CHILD: Create a new child directive to investigate \
+the adjacent finding. Include relevant context from any sibling's observations \
+in the new child's parent_context. Budget comes from your remaining pool.
+
+ACTION 2 — ESCALATE TO YOUR PARENT: Emit the finding as an observation with \
+escalated_adjacency=true. Your parent's Turn 2 will see it and decide whether \
+to act. Use this when the finding falls outside your entire subtree's scope.
+
+ACTION 3 — RECORD AS UNADDRESSED: Emit as an observation with \
+unaddressed_adjacency=true. It will surface in the final report for human \
+review. Use this when the finding is interesting but not worth budget.
+
+────────────────────────────────────────────────────
+STEP 4 — EMIT OUTPUT
+
+Return JSON:
+{{
+    "option_chosen": "A | B | C",
+    "option_reasoning": "why you chose this option — reference specific child outputs",
+    "children_summary": [
+        {{
+            "worker_scope": "what this worker was asked",
+            "observations_count": 3,
+            "key_evidence": "strongest observation in one sentence",
+            "gaps_flagged": "capability limits or self-eval gaps, if any",
+            "zero_records": false,
+            "purpose_aligned": true
+        }}
+    ],
+    "synthesis": {{
+        "patterns": ["cross-cutting pattern descriptions"],
+        "contradictions": ["things that conflict"],
+        "strongest_findings": ["most solid evidence"],
+        "weakest_findings": ["most speculative"]
+    }},
+    "findings": [
+        {{
+            "type": "contradiction|gap|cross_cutting",
+            "summary": "description",
+            "evidence": ["from which workers"],
+            "confidence": 0.8
+        }}
+    ],
+    "adjacent_findings": [
+        {{
+            "description": "what was noticed outside scope",
+            "source_child": "which child noticed it",
+            "action": "spawn_child | escalate | record_unaddressed",
+            "reasoning": "why this action"
+        }}
+    ],
+    "followup_children": [
+        {{
+            "scope_description": "what to investigate",
+            "purpose": "why this child is needed",
+            "data_filter": {{}},
+            "parent_context": "evidence and context for this child",
+            "budget": 0.10
+        }}
+    ],
+    "escalated_observations": [
+        {{
+            "raw_evidence": "the adjacent finding for grandparent consideration",
+            "local_hypothesis": "why this matters",
+            "observation_type": "escalated_adjacency"
+        }}
+    ],
+    "surplus_to_return": 0.00,
+    "surplus_reason": "why returning this amount"
+}}
+
+Respond ONLY with valid JSON, no other text.
+"""

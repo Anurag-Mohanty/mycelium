@@ -218,6 +218,28 @@ def build_node_transcript(run_id, node_data, diag_data, events, tree_data):
             lines.append(f"- {u}")
         lines.append("")
 
+    # Turn 2 Review (only for parent nodes that had children)
+    children_count_check = diag_data.get("output", {}).get("children_spawned",
+                                                            node_data.get("child_directives_count", 0))
+    if children_count_check and children_count_check > 0:
+        lines.append("## Turn 2 Review")
+        lines.append("")
+
+        # Check for v2 Turn 2 data in thinking log
+        thinking_logs = node_data.get("thinking", "")
+        if isinstance(thinking_logs, str) and thinking_logs:
+            # Look for Turn 2 thinking
+            t2_marker = thinking_logs.find("STEP 1")
+            if t2_marker > 0:
+                lines.append("### Turn 2 Reasoning")
+                lines.append(thinking_logs[t2_marker:t2_marker + 2000])
+                lines.append("")
+
+        # Check for option_chosen (v2) or continue_or_resolve (v1)
+        # This data would be in the node's stored Turn 2 output if available
+        lines.append("[Turn 2 structured output stored in node diagnostics]")
+        lines.append("")
+
     # 5. Downstream effects
     lines.append("## Downstream Effects")
     lines.append("")

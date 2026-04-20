@@ -1204,6 +1204,8 @@ Respond ONLY with a JSON array."""}],
                 local_hypothesis=obs.get("local_hypothesis", obs.get("reasoning", "")),
                 confidence=obs.get("confidence", 0.5),
                 surprising_because=obs.get("surprising_because", ""),
+                escalated_adjacency=obs.get("escalated_adjacency", False),
+                unaddressed_adjacency=obs.get("unaddressed_adjacency", False),
             ))
         return NodeResult(
             node_id=result.get("node_id", ""),
@@ -1380,7 +1382,25 @@ Respond ONLY with a JSON array."""}],
             "validations": [_validation_to_dict(v) for v in self.all_validations],
             "significance_scores": self.all_significance_scores,
             "impacts": [_impact_to_dict(im) for im in self.all_impacts],
+            "unaddressed_adjacencies": self._collect_adjacencies(),
         }
+
+    def _collect_adjacencies(self) -> list[dict]:
+        """Collect unaddressed and escalated adjacency observations for the report."""
+        adjacencies = []
+        for nr in self.all_node_results:
+            for obs in nr.observations:
+                if getattr(obs, 'unaddressed_adjacency', False) or \
+                   getattr(obs, 'escalated_adjacency', False):
+                    adjacencies.append({
+                        "raw_evidence": obs.raw_evidence,
+                        "observation_type": obs.observation_type,
+                        "local_hypothesis": obs.local_hypothesis,
+                        "source_node": nr.node_id,
+                        "escalated": getattr(obs, 'escalated_adjacency', False),
+                        "unaddressed": getattr(obs, 'unaddressed_adjacency', False),
+                    })
+        return adjacencies
 
     def _save_node(self, result: NodeResult):
         node_file = self.run_dir / "nodes" / f"{result.node_id[:8]}.json"
@@ -1686,7 +1706,9 @@ def _result_to_dict(r: NodeResult) -> dict:
                         "agency": o.source.agency, "date": o.source.date, "url": o.source.url},
              "observation_type": o.observation_type,
              "confidence": o.confidence,
-             "surprising_because": o.surprising_because}
+             "surprising_because": o.surprising_because,
+             "escalated_adjacency": getattr(o, 'escalated_adjacency', False),
+             "unaddressed_adjacency": getattr(o, 'unaddressed_adjacency', False)}
             for o in r.observations
         ],
         "child_directives_count": len(r.child_directives),

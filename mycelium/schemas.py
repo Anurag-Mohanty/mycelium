@@ -64,6 +64,8 @@ class Observation:
     local_hypothesis: str = ""        # specific explanation of why this is surprising
     confidence: float = 0.5
     surprising_because: str = ""      # expected vs actual
+    escalated_adjacency: bool = False  # flagged for grandparent consideration
+    unaddressed_adjacency: bool = False  # noted but not investigated
 
     # Legacy compat — downstream code may still reference these
     @property

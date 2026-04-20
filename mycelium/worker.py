@@ -184,15 +184,39 @@ class WorkerNode:
                 # Collect synthesis findings
                 self.findings = turn2.get("findings", [])
 
-                # Honor the LLM's continue/resolve decision
-                decision = turn2.get("continue_or_resolve", "resolve")
+                # Store Turn 2 output for transcript
+                self._turn2_output = turn2
+
+                # Determine decision — v2 uses option_chosen, v1 uses continue_or_resolve
+                option = turn2.get("option_chosen", "").upper()
+                if option in ("B", "C"):
+                    decision = "continue"
+                elif option == "A":
+                    decision = "resolve"
+                else:
+                    # v1 fallback
+                    decision = turn2.get("continue_or_resolve", "resolve")
+
                 followups = turn2.get("followup_children", [])
                 if decision == "continue" and followups and self.surplus > 0.05:
-                    self._log(f"Spawning {len(followups)} follow-up investigations")
+                    option_label = f"Option {option}" if option else "continuing"
+                    self._log(f"Spawning {len(followups)} follow-ups ({option_label})")
                     await self._run_followups(followups)
                 elif followups:
-                    reasoning = turn2.get("continue_reasoning", "resolving with current evidence")
-                    self._log(f"RESOLVING (LLM decided): {reasoning[:80]}")
+                    reasoning = turn2.get("option_reasoning",
+                                          turn2.get("continue_reasoning", "resolving"))
+                    self._log(f"RESOLVING: {reasoning[:80]}")
+
+                # Handle escalated observations (v2) — add to node's observations
+                for esc in turn2.get("escalated_observations", []):
+                    self.observations.append({
+                        "raw_evidence": esc.get("raw_evidence", ""),
+                        "local_hypothesis": esc.get("local_hypothesis", ""),
+                        "observation_type": esc.get("observation_type", "escalated_adjacency"),
+                        "source": esc.get("source", {}),
+                        "confidence": esc.get("confidence", 0.5),
+                        "escalated_adjacency": True,
+                    })
 
                 # Emit synthesis events
                 for f in self.findings:
@@ -407,11 +431,15 @@ class WorkerNode:
                 continue
             children_summary.append({
                 "scope": child.directive.scope.description[:100],
+                "purpose": child.directive.purpose[:100] if child.directive.purpose else "",
                 "observations": result.get("observations", [])[:5],
+                "observations_count": len(result.get("observations", [])),
                 "findings": result.get("findings", []),
                 "cost": round(child.spent, 3),
                 "surplus": round(child.surplus, 3),
                 "status": child.status,
+                "self_evaluation": result.get("self_evaluation", child.metrics),
+                "zero_records": child._diagnostics.get("data_received", {}).get("record_count", -1) == 0,
                 "thinking_excerpt": child.thinking_log[0]["thinking"][:200] if child.thinking_log else "",
             })
 
@@ -652,7 +680,20 @@ def _emit_thinking_chunks(node_id: str, turn: str, thinking: str):
 
 def _build_review_prompt(my_observations: list, children_summary: list,
                           budget_remaining: float, total_budget: float) -> str:
-    """Build the Turn 2 review prompt."""
+    """Build the Turn 2 review prompt. Uses v2 prompt if active."""
+    from . import prompts as _prompts
+
+    if _prompts.get_version() == "v2" and hasattr(_prompts, "TURN2_REVIEW_PROMPT"):
+        obs_text = json.dumps(my_observations[:10], indent=2, default=str)[:2000]
+        children_text = json.dumps(children_summary, indent=2, default=str)[:6000]
+        return _prompts.TURN2_REVIEW_PROMPT.format(
+            my_observations=obs_text,
+            children_reports=children_text,
+            budget_remaining=budget_remaining,
+            total_budget=total_budget,
+        )
+
+    # v1 fallback — original prompt
     obs_text = json.dumps(my_observations[:10], indent=2, default=str)[:2000]
     children_text = json.dumps(children_summary, indent=2, default=str)[:4000]
 
