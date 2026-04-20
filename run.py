@@ -21,6 +21,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Set prompt version BEFORE any mycelium imports (they bind at import time)
+if "--prompts" in sys.argv:
+    _idx = sys.argv.index("--prompts")
+    if _idx + 1 < len(sys.argv):
+        from mycelium import prompts as _prompts_mod
+        _prompts_mod.set_version(sys.argv[_idx + 1])
+
 from mycelium.data_sources.federal_register import FederalRegisterSource
 from mycelium.data_sources.npm_registry import NpmRegistrySource
 from mycelium.data_sources.sec_edgar import SecEdgarSource
@@ -64,6 +71,8 @@ Examples:
                         help="Replay a previous run from events.jsonl file")
     parser.add_argument("--speed", type=int, default=10,
                         help="Playback speed multiplier (default: 10)")
+    parser.add_argument("--prompts", choices=["v1", "v2"], default="v1",
+                        help="Prompt version to use (default: v1)")
     return parser.parse_args()
 
 
@@ -224,6 +233,9 @@ async def run_estimate(data_source, hints):
 
 async def main():
     args = parse_args()
+
+    if args.prompts != "v1":
+        print(f"  [CONFIG] Using prompt version: {args.prompts}")
 
     # Playback mode — replay a previous run's events in the visualizer
     if args.playback:
