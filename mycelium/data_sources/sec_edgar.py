@@ -597,6 +597,34 @@ class SecEdgarSource(DataSource):
                     enriched.append(_json.loads(line))
         return enriched
 
+    def filter_schema(self) -> dict:
+        return {
+            "keyword": {
+                "type": "string",
+                "description": "Substring matched against company name in the filing index. Supports 'OR' for alternatives, '-prefix' for exclusion.",
+                "example": "DUKE ENERGY",
+                "required": False,
+            },
+            "companies": {
+                "type": "list[string]",
+                "description": "Exact company names to fetch filings for via CIK lookup.",
+                "example": ["APPLE INC", "TESLA INC"],
+                "required": False,
+            },
+            "sic": {
+                "type": "string",
+                "description": "SIC code prefix for industry filtering.",
+                "example": "4911",
+                "required": False,
+            },
+            "years": {
+                "type": "list[integer]",
+                "description": "Filing years to include.",
+                "example": [2023, 2024, 2025],
+                "required": False,
+            },
+        }
+
     async def close(self):
         await self.client.aclose()
 

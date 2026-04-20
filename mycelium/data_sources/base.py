@@ -34,3 +34,23 @@ class DataSource(ABC):
     async def fetch_document(self, doc_id: str) -> dict:
         """Fetch a single document's full content by ID."""
         ...
+
+    def filter_schema(self) -> dict:
+        """Describe what filter parameters this data source accepts.
+
+        Returns a structured contract so the LLM knows what queries will work.
+        Each parameter is described with type, description, example, and required flag.
+        Shape:
+            {
+                "parameter_name": {
+                    "type": "string" | "list[string]" | "integer" | ...,
+                    "description": "what this filter does",
+                    "example": <concrete example value>,
+                    "required": False
+                }
+            }
+
+        A new connector for any corpus (sensors, wikis, databases) fills in
+        the same structure. Pipeline code never inspects parameter names.
+        """
+        return {}

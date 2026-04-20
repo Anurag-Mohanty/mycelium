@@ -244,6 +244,14 @@ YOUR ASSIGNED AREA:
 ATTENTION LENSES (frequencies to tune into, not questions to answer):
 {lenses}
 
+DATA SOURCE FILTER SCHEMA (how to query this data source when creating children):
+{filter_schema}
+
+When creating child_directives, use ONLY the filter parameter names listed above. \
+The data source does matching as described — use values that will actually match \
+records. If you saw specific entity names in your data, use those exact names. \
+Do NOT invent natural-language queries as filter values.
+
 BUDGET CONTEXT:
 - Total pool remaining: ${budget_remaining:.2f} of ${total_budget:.2f} ({budget_pct:.0f}% remaining)
 {segment_context}

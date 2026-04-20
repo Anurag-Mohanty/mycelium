@@ -417,6 +417,28 @@ class NpmRegistrySource(DataSource):
                                 results[name] = pkg_data.get("downloads", 0)
         return results
 
+    def filter_schema(self) -> dict:
+        return {
+            "keyword": {
+                "type": "string",
+                "description": "Search term passed to npm search API. Matches package name, description, and keywords.",
+                "example": "react hooks",
+                "required": False,
+            },
+            "packages": {
+                "type": "list[string]",
+                "description": "Exact package names to fetch directly by registry lookup.",
+                "example": ["lodash", "express", "@vue/reactivity"],
+                "required": False,
+            },
+            "scope": {
+                "type": "string",
+                "description": "npm scope prefix to filter by organization.",
+                "example": "@babel",
+                "required": False,
+            },
+        }
+
     async def close(self):
         await self.client.aclose()
 

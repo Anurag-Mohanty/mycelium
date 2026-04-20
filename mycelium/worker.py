@@ -211,18 +211,20 @@ class WorkerNode:
     async def _turn_initial(self) -> dict | None:
         """First LLM call: survey the data, produce observations, decide to delegate."""
 
-        # Fetch data
-        documents = await self.data_source.fetch(self.directive.scope.filters, max_results=100)
+        # Validate filters against data source schema before fetching
+        schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
+        filters = dict(self.directive.scope.filters)
+        if schema and filters:
+            valid_params = set(schema.keys())
+            unknown = [k for k in filters if k not in valid_params]
+            if unknown:
+                self._log(f"Filter validation: unknown params {unknown} removed")
+                filters = {k: v for k, v in filters.items() if k in valid_params}
 
-        # Retry with broader filters if zero results
-        if not documents:
-            broader_filters = dict(self.directive.scope.filters)
-            for key in ["document_types", "agencies", "date_range"]:
-                if key in broader_filters:
-                    del broader_filters[key]
-                    documents = await self.data_source.fetch(broader_filters, max_results=100)
-                    if documents:
-                        break
+        # Fetch data — no retry heuristics. If filter produces 0 records,
+        # the node resolves with 0 records and self-eval states what happened.
+        # The parent's Turn 2 decides whether to respawn with a different filter.
+        documents = await self.data_source.fetch(filters, max_results=100)
 
         if not documents:
             return None
@@ -288,6 +290,19 @@ class WorkerNode:
 
         purpose = self.directive.purpose or "Investigate the data in your scope and report what you find."
 
+        # Format filter schema for the prompt
+        schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
+        if schema:
+            schema_lines = []
+            for param, info in schema.items():
+                schema_lines.append(
+                    f"  {param} ({info.get('type', 'string')}): {info.get('description', '')}"
+                    f" Example: {info.get('example', 'N/A')}"
+                )
+            filter_schema_str = "\n".join(schema_lines)
+        else:
+            filter_schema_str = "No schema available."
+
         import datetime
         prompt = NODE_REASONING_PROMPT.format(
             current_date=datetime.date.today().isoformat(),
@@ -295,6 +310,7 @@ class WorkerNode:
             parent_context=parent_ctx,
             scope_description=self.directive.scope.description,
             lenses=lenses_str,
+            filter_schema=filter_schema_str,
             budget_remaining=remaining_own,
             total_budget=self.budget,
             budget_pct=budget_pct,
