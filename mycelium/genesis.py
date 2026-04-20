@@ -12,7 +12,8 @@ from .prompts import GENESIS_PROMPT
 
 
 async def run_genesis(data_source, hints: list[str] = None,
-                      catalog_records: list[dict] = None) -> dict:
+                      catalog_records: list[dict] = None,
+                      survey_results: dict = None) -> dict:
     """Survey the corpus shape and generate attention lenses.
 
     If catalog_records provided, samples from those (wider coverage from
@@ -54,9 +55,31 @@ async def run_genesis(data_source, hints: list[str] = None,
     hints_str = "\n".join(f"- {h}" for h in hints) if hints else \
         "No hints provided — explore with fresh eyes"
 
+    # Build survey findings summary if available
+    survey_findings_str = "No statistical survey available yet."
+    if survey_results:
+        lines = []
+        lines.append(f"Records analyzed: {survey_results.get('record_count', '?')}")
+        lines.append(f"Techniques applied: {', '.join(survey_results.get('techniques_applied', []))}")
+        lines.append(f"Outliers found: {len(survey_results.get('outliers', []))}")
+        lines.append(f"Concentrations: {len(survey_results.get('concentrations', []))}")
+        clusters = survey_results.get("anomaly_clusters", [])
+        if clusters:
+            lines.append(f"Multi-flagged anomaly clusters: {len(clusters)}")
+            for c in clusters[:10]:
+                lines.append(f"  - [{c.get('severity', '?')}] {c.get('name', c.get('description', '?'))}")
+        by_tech = survey_results.get("anomalies_by_technique", {})
+        for tech, data in by_tech.items():
+            if isinstance(data, dict):
+                count = len(data.get("anomalies", []))
+                if count:
+                    lines.append(f"{tech}: {count} anomalies")
+        survey_findings_str = "\n".join(lines)
+
     prompt = GENESIS_PROMPT.format(
         corpus_metadata=corpus_metadata,
         hints=hints_str,
+        survey_findings=survey_findings_str,
     )
 
     client = anthropic.Anthropic()

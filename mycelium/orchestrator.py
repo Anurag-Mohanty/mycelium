@@ -241,6 +241,7 @@ class Orchestrator:
         self.genesis_result = await run_genesis(
             self.data_source, self.hints,
             catalog_records=bulk_records,
+            survey_results=catalog_stats,
         )
         self.budget.record("overhead", self.genesis_result.get("cost", 0))
         self._update_tokens(self.genesis_result.get("token_usage", {}))

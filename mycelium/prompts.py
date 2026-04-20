@@ -54,10 +54,18 @@ cover, what categories they fall into, and what relationships connect them.
 STRUCTURAL DATA:
 {corpus_metadata}
 
+STATISTICAL SURVEY FINDINGS (from programmatic analysis):
+{survey_findings}
+
 USER HINTS (optional context, not instructions):
 {hints}
 
 YOUR TASK:
+
+If statistical findings are provided, let them inform which lenses are most \
+urgent and which entry points have the strongest signals. Distinguish patterns \
+that look like genuine signal from those that look like data artifacts \
+(extraction failures, metadata gaps, collection biases).
 
 1. Summarize the shape of this space in 2-3 sentences. What's here? How much? \
 What's the rough composition? What relationships or structures are visible?
