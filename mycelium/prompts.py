@@ -161,6 +161,34 @@ Respond ONLY with valid JSON, no other text.
 """
 
 
+ANOMALY_ROUTING_PROMPT = """\
+You are routing statistical anomalies to an investigation segment.
+
+SEGMENT:
+Name: {segment_name}
+Scope: {segment_scope}
+Purpose: {segment_reasoning}
+
+AVAILABLE ANOMALIES (numbered):
+{anomaly_list}
+
+Which of these anomalies are RELEVANT to this segment's scope and purpose? \
+An anomaly is relevant if the entities, fields, or patterns it describes \
+fall within what this segment will investigate.
+
+Be selective — only include anomalies this segment can actually investigate \
+with the data it will receive. If none are relevant, return an empty list.
+
+Return ONLY a JSON object:
+{{
+    "relevant_indices": [0, 3, 7],
+    "reasoning": "one sentence explaining your selection"
+}}
+
+Respond ONLY with valid JSON, no other text.
+"""
+
+
 DEEP_DIVE_SELECTION_PROMPT = """\
 The initial exploration produced these findings and observations. \
 Select the 2-3 that would benefit MOST from deeper targeted investigation.

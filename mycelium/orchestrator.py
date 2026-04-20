@@ -33,7 +33,7 @@ from .synthesizer import synthesize
 from .validator import validate_finding
 from .significance import assess_significance
 from .impact import analyze_impact
-from .prompts import DEEP_DIVE_SELECTION_PROMPT
+from .prompts import DEEP_DIVE_SELECTION_PROMPT, ANOMALY_ROUTING_PROMPT
 from . import events
 from .knowledge_graph import KnowledgeGraph
 
@@ -312,26 +312,31 @@ class Orchestrator:
         segment_workers = []
         self._segment_workers = segment_workers  # save ref for metrics
         all_anomalies = getattr(self, '_survey_anomalies', {})
-        anomaly_type_counts = {}  # track what types flow to segments
-        for i, seg in enumerate(segments, 1):
-            # Filter anomalies relevant to this segment's scope
-            seg_anomalies = _filter_anomalies(
-                all_anomalies,
-                seg.get("scope_description", seg["name"]),
-                seg.get("filters", {}).get("keyword", seg["name"]),
-            )
-            # Count total anomalies available vs matched
-            total_available = sum(
-                len(v.get("anomalies", [])) if isinstance(v, dict) else 0
-                for v in all_anomalies.get("anomalies_by_technique", {}).values()
-            ) + len(all_anomalies.get("outliers", []))
+
+        # Route anomalies to segments via LLM — run all routing calls concurrently
+        print(f"\n  Routing anomalies to {len(segments)} segments (LLM reasoning)...")
+        routing_tasks = [
+            self._route_anomalies_to_segment(all_anomalies, seg)
+            for seg in segments
+        ]
+        routed_results = await asyncio.gather(*routing_tasks, return_exceptions=True)
+
+        anomaly_type_counts = {}
+        for i, (seg, routed) in enumerate(zip(segments, routed_results), 1):
+            # Handle routing failures
+            if isinstance(routed, Exception):
+                print(f"    ⚠ Segment {i} routing error: {routed}")
+                seg_anomalies = []
+            else:
+                seg_anomalies = routed
+
             seg_name = seg.get("name", f"seg_{i}")[:30]
-            print(f"    Segment {i} ({seg_name}): {len(seg_anomalies)} of {total_available} targets matched")
+            print(f"    Segment {i} ({seg_name}): {len(seg_anomalies)} targets routed")
 
             for a in seg_anomalies:
                 t = a.get("type", "unknown")
                 anomaly_type_counts[t] = anomaly_type_counts.get(t, 0) + 1
-            # Build purpose from survey anomalies and planner reasoning
+
             anomaly_summary = ""
             if seg_anomalies:
                 anomaly_summary = f" Survey flagged {len(seg_anomalies)} anomalies in this scope."
@@ -1317,6 +1322,136 @@ Respond ONLY with a JSON array."""}],
             json.dump(data, f, indent=2, default=str)
         print(f"\n  Tree saved to {tree_file}")
 
+    async def _route_anomalies_to_segment(self, all_anomalies: dict, segment: dict) -> list[dict]:
+        """Use LLM to decide which anomalies are relevant to a segment.
+
+        Replaces mechanical keyword matching. The LLM receives the segment's
+        scope/purpose and all anomalies, returns which ones belong.
+        On failure: returns empty list (explicit signal, not silent fallback).
+        """
+        # Flatten all anomalies into a numbered list
+        flat = []
+
+        def _build_evidence(a: dict) -> dict:
+            if "evidence" in a:
+                return a["evidence"]
+            skip = {"type", "description", "record", "entity", "flagged_by", "indices"}
+            return {k: v for k, v in a.items() if k not in skip and v is not None}
+
+        for outlier in all_anomalies.get("outliers", []):
+            field = outlier.get("field", "?")
+            value = outlier.get("value", "?")
+            z = outlier.get("z_score", "?")
+            direction = outlier.get("direction", "?")
+            record_id = outlier.get("record_id", "?")
+            flat.append({
+                "type": "outlier",
+                "record": record_id,
+                "description": f"{record_id}: {field}={value} (z-score {z}, {direction})",
+                "flagged_by": ["basic_statistics"],
+                "evidence": {"field": field, "value": value, "z_score": z, "direction": direction,
+                             "record_summary": outlier.get("record_summary", "")},
+            })
+
+        for combo in all_anomalies.get("unusual_combinations", []):
+            flat.append({
+                "type": "unusual_combination",
+                "description": combo.get("description", ""),
+                "flagged_by": ["keyword_signals"],
+                "evidence": {"description": combo.get("description", ""),
+                             "overrepresentation": combo.get("overrepresentation"),
+                             "count": combo.get("count")},
+            })
+
+        for conc in all_anomalies.get("concentrations", []):
+            flat.append({
+                "type": "concentration",
+                "description": (
+                    f"{conc.get('concentration_pct', '?')}% in top 3 values of {conc.get('field', '?')}"
+                    if conc.get("concentration_pct")
+                    else f"{conc.get('pct', '?')}% identical ({conc.get('dominant_value', '?')})"
+                ),
+                "flagged_by": ["entity_concentration"],
+                "evidence": {"field": conc.get("field", ""), "concentration_pct": conc.get("concentration_pct"),
+                             "dominant_value": conc.get("dominant_value", "")},
+            })
+
+        for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
+                    "similarity_anomalies", "velocity_anomalies"):
+            for a in all_anomalies.get(key, []):
+                flat.append({
+                    "type": a.get("type", "anomaly"),
+                    "description": a.get("description", ""),
+                    "record": a.get("entity", a.get("record", "")),
+                    "flagged_by": [key.replace("_anomalies", "")],
+                    "evidence": _build_evidence(a),
+                })
+
+        for tech_key, tech_data in all_anomalies.get("anomalies_by_technique", {}).items():
+            if not isinstance(tech_data, dict):
+                continue
+            for a in tech_data.get("anomalies", []):
+                if not isinstance(a, dict):
+                    continue
+                flat.append({
+                    "type": a.get("type", tech_key),
+                    "description": a.get("description", ""),
+                    "record": a.get("entity", a.get("record", "")),
+                    "flagged_by": [tech_key],
+                    "evidence": _build_evidence(a),
+                })
+
+        if not flat:
+            return []
+
+        # Format for LLM — compute how many fit in context
+        # Each anomaly is ~100-200 tokens as formatted text. Sonnet context is 200K.
+        # Reserve 2K for prompt + response. The rest is anomaly list.
+        # At ~150 tokens/anomaly, we can fit ~1300 anomalies. If we have more,
+        # we need to truncate — but derive the cap from the constraint.
+        sample = json.dumps(flat[0], default=str)
+        tokens_per_anomaly = len(sample) // 3  # rough: 3 chars per token
+        max_context_tokens = 180_000  # leave room for prompt + response
+        max_anomalies = max(50, max_context_tokens // max(1, tokens_per_anomaly))
+        anomalies_to_send = flat[:max_anomalies]
+
+        # Build numbered list for the prompt
+        lines = []
+        for i, a in enumerate(anomalies_to_send):
+            desc = a.get("description", "")[:200]
+            record = a.get("record", "")
+            atype = a.get("type", "?")
+            lines.append(f"[{i}] [{atype}] {record}: {desc}")
+
+        prompt = ANOMALY_ROUTING_PROMPT.format(
+            segment_name=segment.get("name", ""),
+            segment_scope=segment.get("scope_description", segment.get("name", "")),
+            segment_reasoning=segment.get("reasoning", ""),
+            anomaly_list="\n".join(lines),
+        )
+
+        try:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            cost = (response.usage.input_tokens * 3 + response.usage.output_tokens * 15) / 1_000_000
+            self.budget.record("overhead", cost)
+
+            output = response.content[0].text
+            result = json.loads(output) if output.strip().startswith("{") else \
+                json.loads(output[output.find("{"):output.rfind("}") + 1])
+
+            indices = result.get("relevant_indices", [])
+            selected = [anomalies_to_send[i] for i in indices if 0 <= i < len(anomalies_to_send)]
+            return selected
+
+        except Exception as e:
+            print(f"    ⚠ LLM routing failed for segment '{segment.get('name', '?')}': {e}")
+            return []
+
     def _write_run_metrics(self):
         """Compute and write run metrics from existing data. No LLM calls."""
         elapsed = time.time() - self.start_time
@@ -1509,119 +1644,5 @@ def _parse_json(text: str) -> dict:
     raise ValueError("Could not extract JSON")
 
 
-def _filter_anomalies(all_anomalies: dict, scope_description: str,
-                      keyword: str) -> list[dict]:
-    """Filter survey anomalies to those relevant to a scope.
-
-    Domain-agnostic: matches scope keywords against record_ids,
-    descriptions, field values, and anomaly text. No field-name
-    knowledge — pure string matching.
-    """
-    if not all_anomalies:
-        return []
-
-    # Build search terms from scope
-    terms = set()
-    for word in (scope_description + " " + keyword).lower().split():
-        word = word.strip(".,;:'\"()[]{}!?")
-        if len(word) > 2:
-            terms.add(word)
-
-    relevant = []
-
-    def _matches(item: dict) -> bool:
-        """Check if any search term appears in the anomaly's text fields."""
-        text = " ".join(str(v) for v in item.values() if isinstance(v, (str, int, float))).lower()
-        return any(t in text for t in terms)
-
-    for outlier in all_anomalies.get("outliers", []):
-        if _matches(outlier):
-            field = outlier.get("field", "?")
-            value = outlier.get("value", "?")
-            z = outlier.get("z_score", "?")
-            direction = outlier.get("direction", "?")
-            record_id = outlier.get("record_id", "?")
-            relevant.append({
-                "type": "outlier",
-                "record": record_id,
-                "description": f"{record_id}: {field}={value} (z-score {z}, {direction})",
-                "flagged_by": ["basic_statistics"],
-                "evidence": {
-                    "field": field,
-                    "value": value,
-                    "z_score": z,
-                    "direction": direction,
-                    "record_summary": outlier.get("record_summary", ""),
-                },
-            })
-
-    for combo in all_anomalies.get("unusual_combinations", []):
-        if _matches(combo):
-            relevant.append({
-                "type": "unusual_combination",
-                "description": combo.get("description", ""),
-                "flagged_by": ["keyword_signals"],
-                "evidence": {
-                    "description": combo.get("description", ""),
-                    "overrepresentation": combo.get("overrepresentation"),
-                    "count": combo.get("count"),
-                },
-            })
-
-    for conc in all_anomalies.get("concentrations", []):
-        if _matches(conc):
-            relevant.append({
-                "type": "concentration",
-                "description": (
-                    f"{conc.get('concentration_pct', '?')}% in top 3 values of {conc.get('field', '?')}"
-                    if conc.get("concentration_pct")
-                    else f"{conc.get('pct', '?')}% identical ({conc.get('dominant_value', '?')})"
-                ),
-                "flagged_by": ["entity_concentration"],
-                "evidence": {
-                    "field": conc.get("field", ""),
-                    "concentration_pct": conc.get("concentration_pct"),
-                    "dominant_value": conc.get("dominant_value", ""),
-                    "top_values": conc.get("top_values", []),
-                },
-            })
-
-    # Other anomaly categories + anomalies_by_technique — build evidence from
-    # whatever fields the technique provided beyond the minimum identifiers
-    def _build_evidence(a: dict) -> dict:
-        """Extract evidence from any anomaly dict, regardless of technique."""
-        if "evidence" in a:
-            return a["evidence"]
-        # Build from all non-identifier fields
-        skip = {"type", "description", "record", "entity", "flagged_by", "indices"}
-        return {k: v for k, v in a.items() if k not in skip and v is not None}
-
-    for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
-                "similarity_anomalies", "velocity_anomalies"):
-        for a in all_anomalies.get(key, []):
-            if _matches(a):
-                relevant.append({
-                    "type": a.get("type", "anomaly"),
-                    "description": a.get("description", ""),
-                    "record": a.get("entity", a.get("record", "")),
-                    "flagged_by": [key.replace("_anomalies", "")],
-                    "evidence": _build_evidence(a),
-                })
-
-    survey_techniques = all_anomalies.get("anomalies_by_technique", {})
-    for tech_key, tech_data in survey_techniques.items():
-        if not isinstance(tech_data, dict):
-            continue
-        for a in tech_data.get("anomalies", []):
-            if not isinstance(a, dict):
-                continue
-            if _matches(a):
-                relevant.append({
-                    "type": a.get("type", tech_key),
-                    "description": a.get("description", ""),
-                    "record": a.get("entity", a.get("record", "")),
-                    "flagged_by": [tech_key],
-                    "evidence": _build_evidence(a),
-                })
-
-    return relevant[:50]
+    # _filter_anomalies DELETED — replaced by Orchestrator._route_anomalies_to_segment()
+    # which uses LLM reasoning instead of keyword matching.
