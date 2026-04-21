@@ -174,10 +174,11 @@ class BudgetPool:
         self.reserved = 0.0  # money committed but not yet spent
         self._lock = asyncio.Lock()
 
-        # Phase allocations — exploration is a HARD cap, others are soft
+        # Phase allocations — exploration and review are HARD caps, others are soft
         self.phase_limits = {
-            "exploration": 0.50,
-            "synthesis": 0.18,
+            "exploration": 0.40,
+            "review": 0.15,       # parent Turn 2 reasoning over completed children
+            "synthesis": 0.13,
             "deep_dive": 0.08,
             "validation": 0.07,
             "impact": 0.10,
@@ -249,6 +250,12 @@ class BudgetPool:
         """True when exploration phase has hit its hard limit."""
         phase_limit = self.total * self.phase_limits["exploration"]
         return self.phase_spent.get("exploration", 0) >= phase_limit
+
+    @property
+    def review_exhausted(self) -> bool:
+        """True when review phase has hit its hard limit."""
+        phase_limit = self.total * self.phase_limits.get("review", 0.15)
+        return self.phase_spent.get("review", 0) >= phase_limit
 
     def exploration_budget(self) -> float:
         return self.total * self.phase_limits["exploration"]

@@ -462,6 +462,7 @@ class Orchestrator:
         print(f"  Validated: {self.stats.findings_confirmed}/{self.stats.findings_validated} confirmed"
               f"  Deep-dives: {self.stats.deep_dives_executed}")
         print(f"  Phases: explore=${self.budget.phase_spent.get('exploration',0):.2f} "
+              f"review=${self.budget.phase_spent.get('review',0):.2f} "
               f"synth=${self.budget.phase_spent.get('synthesis',0):.2f} "
               f"dive=${self.budget.phase_spent.get('deep_dive',0):.2f} "
               f"valid=${self.budget.phase_spent.get('validation',0):.2f} "

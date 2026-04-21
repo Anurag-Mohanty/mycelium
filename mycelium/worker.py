@@ -468,8 +468,8 @@ class WorkerNode:
             total_budget=self.budget,
         )
 
-        # Budget gate
-        if self._budget_pool and self._budget_pool.exploration_exhausted:
+        # Budget gate — review charges to review phase, not exploration
+        if self._budget_pool and self._budget_pool.review_exhausted:
             return None
 
         async with self._semaphore:
@@ -479,7 +479,7 @@ class WorkerNode:
         self.token_usage["input_tokens"] += usage["input_tokens"]
         self.token_usage["output_tokens"] += usage["output_tokens"]
         if self._budget_pool:
-            self._budget_pool.record("exploration", cost)
+            self._budget_pool.record("review", cost)
         self.thinking_log.append({"turn": "review", "thinking": thinking})
 
         _emit_thinking_chunks(self.node_id, "review", thinking)
