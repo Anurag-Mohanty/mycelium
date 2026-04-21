@@ -1043,7 +1043,9 @@ Respond ONLY with a JSON array."""}],
                 "child_directives_count": len(worker.child_workers),
                 "unresolved": [],
                 "raw_reasoning": "",
-                "thinking": "\n\n".join(t.get("thinking", "") for t in worker.thinking_log),
+                "thinking_log": worker.thinking_log,  # preserve turn-level structure
+                "thinking": "\n\n".join(t.get("thinking", "") for t in worker.thinking_log),  # backward compat
+                "turn2_review": getattr(worker, '_turn2_output', None),  # structured Turn 2 output
                 "token_usage": {},
                 "cost": worker.spent,
             }

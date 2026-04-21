@@ -122,19 +122,36 @@ def build_node_transcript(run_id, node_data, diag_data, events, tree_data):
     lines.append("[parent context embedded in prompt — see thinking below for full context]")
     lines.append("")
 
-    # 3. Reasoning
+    # 3. Reasoning — use thinking_log (list) if available, else fall back to thinking (string)
     lines.append("## Reasoning")
     lines.append("")
-    thinking = node_data.get("thinking", "")
-    if thinking:
+    thinking_log = node_data.get("thinking_log", [])
+    thinking_str = node_data.get("thinking", "")
+
+    if thinking_log and isinstance(thinking_log, list):
+        # New format: per-turn thinking entries
+        for entry in thinking_log:
+            turn = entry.get("turn", "unknown")
+            text = entry.get("thinking", "")
+            if not text:
+                continue
+            lines.append(f"### Turn: {turn}")
+            lines.append("")
+            if len(text) > 30000:
+                lines.append(text[:30000])
+                lines.append(f"\n[TRUNCATED — {len(text)} chars total, showing first 30000]")
+            else:
+                lines.append(text)
+            lines.append("")
+    elif thinking_str:
+        # Old format: single combined string (backward compat)
         lines.append("### Extended Thinking")
         lines.append("")
-        # Preserve full thinking — only truncate if enormous
-        if len(thinking) > 50000:
-            lines.append(thinking[:50000])
-            lines.append(f"\n[TRUNCATED — {len(thinking)} chars total, showing first 50000]")
+        if len(thinking_str) > 50000:
+            lines.append(thinking_str[:50000])
+            lines.append(f"\n[TRUNCATED — {len(thinking_str)} chars total, showing first 50000]")
         else:
-            lines.append(thinking)
+            lines.append(thinking_str)
     else:
         thinking_summary = diag_data.get("thinking_summary", "")
         if thinking_summary:
@@ -222,23 +239,85 @@ def build_node_transcript(run_id, node_data, diag_data, events, tree_data):
     children_count_check = diag_data.get("output", {}).get("children_spawned",
                                                             node_data.get("child_directives_count", 0))
     if children_count_check and children_count_check > 0:
-        lines.append("## Turn 2 Review")
-        lines.append("")
+        turn2 = node_data.get("turn2_review")
+        if turn2 and isinstance(turn2, dict):
+            lines.append("## Turn 2 Review")
+            lines.append("")
 
-        # Check for v2 Turn 2 data in thinking log
-        thinking_logs = node_data.get("thinking", "")
-        if isinstance(thinking_logs, str) and thinking_logs:
-            # Look for Turn 2 thinking
-            t2_marker = thinking_logs.find("STEP 1")
-            if t2_marker > 0:
-                lines.append("### Turn 2 Reasoning")
-                lines.append(thinking_logs[t2_marker:t2_marker + 2000])
+            # Option chosen
+            option = turn2.get("option_chosen", turn2.get("continue_or_resolve", "?"))
+            reasoning = turn2.get("option_reasoning",
+                                  turn2.get("continue_reasoning", ""))
+            lines.append(f"### Option Chosen: {option}")
+            lines.append(f"{reasoning}")
+            lines.append("")
+
+            # Children summary from Turn 2
+            children_sum = turn2.get("children_summary", turn2.get("worker_reviews", []))
+            if children_sum:
+                lines.append("### Children Summary")
+                for cs in children_sum:
+                    scope = cs.get("worker_scope", cs.get("scope", "?"))
+                    aligned = cs.get("purpose_aligned", "?")
+                    assessment = cs.get("assessment", cs.get("key_evidence", ""))
+                    obs_count = cs.get("observations_count", "?")
+                    zero = cs.get("zero_records", False)
+                    gaps = cs.get("gaps_flagged", "")
+                    lines.append(f"- **{scope[:60]}**: {obs_count} obs, aligned={aligned}"
+                                 + (f", zero_records" if zero else "")
+                                 + (f", gaps: {gaps[:80]}" if gaps else ""))
+                    if assessment:
+                        lines.append(f"  {assessment[:150]}")
                 lines.append("")
 
-        # Check for option_chosen (v2) or continue_or_resolve (v1)
-        # This data would be in the node's stored Turn 2 output if available
-        lines.append("[Turn 2 structured output stored in node diagnostics]")
-        lines.append("")
+            # Adjacent findings
+            adjacent = turn2.get("adjacent_findings", [])
+            if adjacent:
+                lines.append("### Adjacent Findings Handled")
+                for af in adjacent:
+                    action = af.get("action", "?")
+                    desc = af.get("description", "")[:150]
+                    reason = af.get("reasoning", "")[:100]
+                    lines.append(f"- **{action}**: {desc}")
+                    if reason:
+                        lines.append(f"  Reasoning: {reason}")
+                lines.append("")
+
+            # Escalated observations
+            escalated = turn2.get("escalated_observations", [])
+            if escalated:
+                lines.append("### Escalated Observations")
+                for esc in escalated:
+                    lines.append(f"- {esc.get('raw_evidence', '')[:200]}")
+                    if esc.get("local_hypothesis"):
+                        lines.append(f"  Hypothesis: {esc['local_hypothesis'][:150]}")
+                lines.append("")
+
+            # Synthesis findings
+            findings = turn2.get("findings", [])
+            if findings:
+                lines.append("### Findings from Synthesis")
+                for f in findings:
+                    lines.append(f"- [{f.get('type', '?')}] {f.get('summary', '')[:150]} "
+                                 f"(confidence: {f.get('confidence', '?')})")
+                lines.append("")
+
+            # Follow-up directives
+            followups = turn2.get("followup_children", [])
+            if followups:
+                lines.append("### Follow-up Directives Emitted")
+                for fu in followups:
+                    lines.append(f"- {fu.get('scope_description', fu.get('purpose', ''))[:120]}")
+                    if fu.get("budget"):
+                        lines.append(f"  Budget: ${fu['budget']:.2f}")
+                lines.append("")
+
+        else:
+            # No structured Turn 2 data — node had children but Turn 2 wasn't persisted
+            lines.append("## Turn 2 Review")
+            lines.append("")
+            lines.append("No Turn 2 review data persisted for this node.")
+            lines.append("")
 
     # 5. Downstream effects
     lines.append("## Downstream Effects")

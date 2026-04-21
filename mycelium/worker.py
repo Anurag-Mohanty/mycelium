@@ -114,13 +114,28 @@ class WorkerNode:
         })
         self._log(f"{n_obs} observations + delegating → {n_children} workers")
 
-        # Allocate budget to children
-        remaining_for_children = self.budget - self.spent - 0.10  # reserve $0.10 for Turn 2
+        # Allocate budget to children — reserve for Turn 2 but never go negative
+        turn2_reserve = min(0.10, max(0, self.budget - self.spent) * 0.2)  # 20% of remaining, capped at $0.10
+        remaining_for_children = max(0, self.budget - self.spent - turn2_reserve)
+
+        if remaining_for_children <= 0:
+            # No budget for children — resolve with current observations instead
+            self.status = "resolved"
+            self._log(f"No budget for children (${self.budget - self.spent:.3f} remaining). Resolving with {n_obs} observations.")
+            top_obs = self.observations[0].get("raw_evidence", "")[:80] if self.observations else ""
+            events.emit("node_resolved", {
+                "node_id": self.node_id, "tree_position": self.pos,
+                "observations_count": n_obs, "cost_spent": self.spent,
+                "top_observation": top_obs,
+            })
+            return self._result()
+
         child_budget_each = remaining_for_children / max(1, n_children)
 
         for i, cd in enumerate(child_directives, 1):
             child_budget = cd.get("budget", child_budget_each)
             child_budget = min(child_budget, remaining_for_children / max(1, n_children - i + 1))
+            child_budget = max(0, child_budget)  # never negative
 
             # Use structured data_filter if LLM produced one; otherwise inherit parent's
             child_data_filter = cd.get("data_filter", {})
