@@ -116,18 +116,51 @@ CORPUS SHAPE (from initial survey):
 {genesis_output}
 
 TOTAL BUDGET: ${budget:.2f}
-BUDGET ALLOCATION:
-  - Exploration: 50% = ${exploration_budget:.2f}
-  - Synthesis: 18% = ${synthesis_budget:.2f}
-  - Deep-dive reserve: 8% = ${deep_dive_budget:.2f}
-  - Validation + Significance: 10% = ~${validation_budget:.2f}
-  - Impact analysis: 10% (reserved)
-  - Overhead (genesis, planner, report): 7% = ${overhead_budget:.2f}
+NUMBER OF GENESIS LENSES: {num_lenses}
 
-ESTIMATED COST PER NODE: $0.03-0.05
-ESTIMATED EXPLORATION NODES POSSIBLE: ~{estimated_nodes}
+DOWNSTREAM PHASE COSTS (reserved, not your decision):
+  - Review (parent Turn 2): 15% of total = ${review_budget:.2f}
+  - Synthesis: ~$0.06-0.08
+  - Deep-dive reserve: ~$0.02-0.05
+  - Validation + Impact: ~$0.10-0.20
+  - Overhead (genesis, planner, report): ~$0.30-0.40
 
-Create an exploration plan that uses the exploration budget FULLY and STRATEGICALLY.
+ESTIMATED COST PER EXPLORATION NODE: $0.10-0.18 (includes Turn 1 reasoning + data fetch)
+MINIMUM VIABLE LEAF ENVELOPE: ${leaf_viable_envelope:.2f} (a child must receive at least \
+this much to do productive work)
+
+YOUR FIRST TASK: Decide the exploration envelope — what percentage of the total \
+budget should be allocated to exploration (initial probes + continuation follow-ups).
+
+Reason explicitly about:
+- How many of the {num_lenses} genesis lenses look worth pursuing as segments?
+- At ~$0.15 per probe, how much would initial breadth cost?
+- How much continuation budget would fund 2-3 deep follow-ups per segment?
+- After subtracting downstream phase costs, what remains for exploration?
+
+The exploration envelope must be between 40% and 75% of total budget. Below 40% \
+starves exploration. Above 75% starves downstream phases.
+
+YOUR SECOND TASK: Compute the maximum decomposition depth the budget can support.
+
+Work BACKWARDS from leaf viability. Don't pick a depth and hope it's affordable — \
+compute the depth that falls out of the budget math.
+
+1. A leaf node needs at least ${leaf_viable_envelope:.2f} envelope to do productive work.
+2. A parent typically keeps ~30% of its envelope for its own Turn 1 work and reserves, \
+allocating ~70% across children.
+3. Starting from your exploration envelope, work through the tree levels:
+   - Root segments get exploration_envelope / num_segments each
+   - Depth 1 children get parent_envelope * 0.70 / expected_branching each
+   - Continue until the per-node envelope drops below ${leaf_viable_envelope:.2f}
+4. The last depth where nodes still have at least ${leaf_viable_envelope:.2f} is your \
+max_decomposition_depth.
+
+Show your math explicitly. Use your assumed leaf_viable_envelope, parent_retention_ratio, \
+and expected_branching factor so the calculation is auditable.
+
+YOUR THIRD TASK: Create an exploration plan that uses the exploration envelope \
+FULLY and STRATEGICALLY.
 
 Consider:
 1. How many distinct segments exist in this space?
@@ -135,13 +168,25 @@ Consider:
 3. How should budget be divided across segments? (proportional to complexity)
 4. Are there areas flagged as especially interesting that deserve extra allocation?
 
-IMPORTANT: Plan for the FULL exploration budget. If you have budget for ~{estimated_nodes} \
-nodes and only plan for 30, you're wasting 75% of the research grant. Plan ambitiously.
+IMPORTANT: Plan for the FULL exploration envelope. If you have budget for many \
+nodes and only plan for a few, you're wasting the research grant. Plan ambitiously.
 
 Return JSON:
 {{
-    "exploration_budget": {exploration_budget:.2f},
-    "estimated_total_nodes": {estimated_nodes},
+    "exploration_envelope": {{
+        "reasoning": "your reasoning about how much of the budget should go to exploration",
+        "percentage": 0.60,
+        "absolute_dollars": 0.00
+    }},
+    "max_decomposition_depth": {{
+        "leaf_viable_envelope": {leaf_viable_envelope:.2f},
+        "parent_retention_ratio": 0.30,
+        "expected_branching": 3,
+        "reasoning": "show your math: starting envelope, per-level allocation, where it drops below leaf viable",
+        "depth": 2
+    }},
+    "exploration_budget": 0.00,
+    "estimated_total_nodes": 0,
     "segments": [
         {{
             "name": "segment_name",
@@ -153,9 +198,12 @@ Return JSON:
             "reasoning": "why this allocation"
         }}
     ],
-    "deep_dive_reserve": {deep_dive_budget:.2f},
+    "deep_dive_reserve": 0.05,
     "deep_dive_strategy": "description of how to use the deep-dive reserve"
 }}
+
+Set exploration_budget equal to the absolute_dollars from your exploration_envelope.
+Set segment sub_budgets to sum to the exploration_budget.
 
 Respond ONLY with valid JSON, no other text.
 """
@@ -285,12 +333,27 @@ records. If you saw specific entity names in your data, use those exact names. \
 Do NOT invent natural-language queries as filter values.
 
 BUDGET CONTEXT:
-- Total pool remaining: ${budget_remaining:.2f} of ${total_budget:.2f} ({budget_pct:.0f}% remaining)
+You have been allocated ${budget_remaining:.2f} for this investigation.
+Your parent has approximately ${parent_pool_remaining:.2f} remaining in its pool.
+The overall exploration phase has approximately ${phase_remaining:.2f} remaining.
 {segment_context}
+Your current depth: {current_depth}
+Max decomposition depth: {max_depth}
+Minimum child envelope: ${leaf_viable_envelope:.2f}
+
+{depth_guidance}
+
 {budget_stage}
 {capacity_context}
-Your budget exists to be USED, not saved. A run that ends with 90% unspent has \
-FAILED. Each reasoning step costs roughly $0.03-0.10.
+When allocating budget to children:
+- Each child must receive at least ${leaf_viable_envelope:.2f}. The system will \
+automatically reject spawns below this minimum.
+- Prefer 2-3 well-funded children over 4-5 underfunded ones.
+
+Quality investigation is more valuable than speed. If the data supports deeper \
+investigation than your envelope allows, name that explicitly in your \
+worthwhile_followup_threads — do not artificially wrap up work that deserves \
+more attention. Do not produce shallow observations just to hit a minimum count.
 
 ITEMS IN YOUR SCOPE ({doc_count} total):
 {fetched_data}
@@ -334,7 +397,7 @@ hypotheses. Each should:
 - Describe what would confirm or deny it
 - Note which attention lenses it relates to
 
-STEP 4 — ASSESS YOUR COVERAGE
+STEP 4 — ASSESS YOUR COVERAGE AND SELF-ASSESS
 
 You just analyzed the data in your scope. Now honestly assess: did you do it justice?
 
@@ -346,6 +409,12 @@ a specific entity, a specific pattern, a specific contradiction — that I could
 only scratch the surface of?
 - If I had to present my analysis to an expert, would they say "you covered this \
 thoroughly" or "you glossed over the interesting parts"?
+
+SELF-ASSESSMENT: Before producing output, you MUST populate every field in \
+the self_evaluation section of the output schema. This includes \
+worthwhile_followup_threads, capability_gaps, and adjacent_findings — all \
+three are REQUIRED fields. See the output schema for what each field needs. \
+Empty arrays require an explicit justification string.
 
 Based on your honest assessment:
 
@@ -409,6 +478,8 @@ Produce a JSON object with this exact structure:
             }},
             "observation_type": "definition | pattern | anomaly | absence | temporal_shift | concentration | contradiction_signal | dependency_risk | single_point_of_failure",
             "confidence": 0.85,
+            "confidence_rationale": "why you are this confident — name any uncertainties (thin evidence, single data point, possible alternative explanations)",
+            "signal_strength": "data_originated | confirmatory",
             "surprising_because": "what you would EXPECT to see and how this differs"
         }}
     ],
@@ -426,12 +497,28 @@ Produce a JSON object with this exact structure:
     "self_evaluation": {{
         "purpose_addressed": true,
         "purpose_gap": "if you could not address your purpose, explain what was missing",
-        "evidence_quality": "high | medium | low — did you cite specific data or describe general patterns?"
+        "evidence_quality": "high | medium | low — did you cite specific data or describe general patterns?",
+        "worthwhile_followup_threads": [
+            {{
+                "what_to_investigate": "REQUIRED — a specific investigation thread, not vague. What entity, pattern, or question?",
+                "data_or_tools_needed": "what data source, filter, or tool is required",
+                "question_it_answers": "what specific question this would resolve",
+                "scope_estimate": "a focused follow-up | a full decomposition"
+            }}
+        ],
+        "capability_gaps": ["REQUIRED — what data or tools were needed but unavailable. If none, include the string: 'no capability gaps encountered'"],
+        "adjacent_findings": ["REQUIRED — observations noticed OUTSIDE your assigned scope. If none, include the string: 'no adjacent findings outside scope'"]
     }},
     "unresolved": [
         "things you noticed but couldn't investigate from here"
     ]
 }}
+
+BEFORE FINALIZING: Verify your self_evaluation contains ALL required fields \
+populated with content: purpose_addressed, evidence_quality, \
+worthwhile_followup_threads (at least one thread OR explicit "nothing warrants \
+deeper investigation" statement), capability_gaps, and adjacent_findings. \
+Empty arrays without justification strings will be flagged as incomplete.
 
 SELF-REVIEW: Before producing your output, assess your own work:
 - You were asked to investigate: [your PURPOSE above]. Did your observations \
@@ -442,6 +529,12 @@ or flag the gap in self_evaluation.purpose_gap.
 - Rate your evidence_quality: "high" if every observation cites specific data \
 values from the records, "low" if your observations are generic descriptions \
 that could be written without reading the data.
+- For each observation, did you honestly set signal_strength? Observations \
+about well-known facts are "confirmatory" even with specific numbers.
+- For each observation, did you name your uncertainties in confidence_rationale?
+- Are your worthwhile_followup_threads specific enough that a parent could \
+spawn a targeted continuation from each one? If not, revise or remove them.
+- Did you note anything outside your scope in adjacent_findings?
 
 INTEGRITY RULES:
 - Every observation MUST cite specific data with its identifier. If you can't \
@@ -938,19 +1031,19 @@ RULES:
 
 
 TURN2_REVIEW_PROMPT = """\
-Your workers have reported back. Review their results and decide what to do next.
+Your children have returned. You have ${budget_remaining:.2f} available in \
+your pool (this includes budget returned from children who resolved under envelope).
 
 YOUR ORIGINAL OBSERVATIONS:
 {my_observations}
 
-WORKER REPORTS:
+WORKER REPORTS (including self-assessments):
 {children_reports}
 
-BUDGET STATUS:
-  Your remaining budget: ${budget_remaining:.2f}
-  Your total allocation: ${total_budget:.2f}
-
-Now reason through the following steps IN ORDER:
+Read each child's output carefully, especially their self-assessment sections:
+- worthwhile_followup_threads: what specific investigations each child flagged as valuable
+- signal_strength on observations: which observations are data_originated vs confirmatory
+- capability_gaps and adjacent_findings: what each child noticed outside scope or couldn't do
 
 ────────────────────────────────────────────────────
 STEP 1 — SUMMARIZE EACH CHILD'S OUTPUT
@@ -958,76 +1051,90 @@ STEP 1 — SUMMARIZE EACH CHILD'S OUTPUT
 For each worker, state:
 - What it was asked to do (its purpose)
 - What it returned: observation count, key evidence, self-evaluation
-- Whether it flagged gaps or capability limits
+- How many observations are data_originated vs confirmatory
+- What follow-up threads it flagged as worthwhile
+- What capability gaps or adjacent findings it reported
 - Whether it returned zero records (data fetch failure)
 
 ────────────────────────────────────────────────────
-STEP 2 — CHOOSE ONE OPTION
+STEP 2 — BUDGET DEPLOYMENT DECISION
 
-Based on your summary, choose EXACTLY ONE:
+Your primary question: what is the highest-value deployment of your \
+${budget_remaining:.2f} available budget?
 
-OPTION A: RESOLVE
-The children collectively produced sufficient evidence to synthesize \
-a finding for this line of investigation. No further decomposition \
-needed. Synthesize what's there and return it.
+Choose EXACTLY ONE option. Options in order of priority:
 
-OPTION B: SPAWN MORE CHILDREN ON THE CURRENT LINE
-The children's failure was scope (too broad, too narrow) or specificity \
-(question was unclear). A different child formulation might succeed. \
-You MUST name what was wrong with the previous children's framing and \
-how a new formulation would avoid the same failure. If you cannot \
-articulate this, choose A or C instead.
+OPTION A: FUND CONTINUATION ON A FLAGGED THREAD
+One or more children named specific worthwhile follow-up threads in their \
+self-assessment. Spawn a continuation child on the highest-value thread, \
+funded from your available pool. The continuation child receives the original \
+child's relevant observations as parent context, plus the specific thread scope.
 
-OPTION C: PIVOT
-The children consistently flagged the SAME capability limit — data \
-availability, tool access, or scope outside the data source's reach. \
-More children on the current line will hit the same limit. \
-Reason about what the children DID learn (even while flagging gaps) \
-and whether an adjacent investigation is answerable with available data. \
-If yes, spawn children on the pivoted line. If no, resolve and flag the \
-capability gap upward.
+OPTION B: FUND ADJACENT-FINDING INVESTIGATION
+A child's adjacent findings (observations noticed outside its assigned scope) \
+point to something worth investigating. Spawn a new child with the adjacent \
+finding as its scope. Include relevant context from sibling observations.
 
-KEY PRINCIPLE: A consistent pattern of children flagging the SAME gap \
-(e.g., multiple children all saying "I need data this source doesn't have") \
-is strong evidence for Option C, not Option B. More children with the same \
-data access will hit the same gap.
+OPTION C: SPAWN MORE CHILDREN ON THE CURRENT LINE
+The children's failure was scope or specificity — a different child formulation \
+might succeed. You MUST name what was wrong with the previous children's framing \
+and how a new formulation would avoid the same failure.
+
+OPTION D: PIVOT
+The children consistently flagged the SAME capability limit. More children on \
+the current line will hit the same limit. Reason about what the children DID \
+learn and whether an adjacent investigation is answerable with available data. \
+If yes, spawn children on the pivoted line. If no, resolve and escalate the gap.
+
+OPTION E: RESOLVE
+No further deployment of available budget would produce valuable work. \
+Resolution is correct ONLY when you can justify why:
+(1) No flagged follow-up threads are worth pursuing, AND
+(2) No adjacent findings warrant investigation, AND
+(3) The current line cannot be usefully reformulated.
+
+"My children addressed their briefs" is NOT sufficient justification for \
+resolution when valuable deployment options remain.
+
+KEY PRINCIPLES:
+- A consistent pattern of children flagging the SAME gap is evidence for D, not C.
+- Children that named specific follow-up threads are giving you deployment targets \
+for option A — use them.
+- Resolution (E) is the LAST option, not the default. Justify it actively.
 
 ────────────────────────────────────────────────────
 STEP 3 — IDENTIFY ADJACENT FINDINGS
 
-Examine the children's observations for ADJACENT FINDINGS — things a child \
-noticed that are OUTSIDE its assigned scope but potentially valuable.
-
-An adjacent finding looks like: "I was asked about X, could not fully \
-address it, but while looking at the data I noticed Y, which relates to \
-[some other area]."
+Examine ALL children's adjacent_findings and capability_gaps for findings \
+outside their assigned scope.
 
 For EACH adjacent finding, choose ONE action:
 
-ACTION 1 — SPAWN A NEW CHILD: Create a new child directive to investigate \
-the adjacent finding. Include relevant context from any sibling's observations \
-in the new child's parent_context. Budget comes from your remaining pool.
+ACTION 1 — SPAWN A NEW CHILD: Create a child directive to investigate it. \
+Budget comes from your remaining pool.
 
-ACTION 2 — ESCALATE TO YOUR PARENT: Emit the finding as an observation with \
-escalated_adjacency=true. Your parent's Turn 2 will see it and decide whether \
-to act. Use this when the finding falls outside your entire subtree's scope.
+ACTION 2 — ESCALATE TO YOUR PARENT: Emit as an observation with \
+escalated_adjacency=true. Use when the finding falls outside your entire \
+subtree's scope.
 
 ACTION 3 — RECORD AS UNADDRESSED: Emit as an observation with \
-unaddressed_adjacency=true. It will surface in the final report for human \
-review. Use this when the finding is interesting but not worth budget.
+unaddressed_adjacency=true. Use when interesting but not worth budget.
 
 ────────────────────────────────────────────────────
 STEP 4 — EMIT OUTPUT
 
 Return JSON:
 {{
-    "option_chosen": "A | B | C",
-    "option_reasoning": "why you chose this option — reference specific child outputs",
+    "option_chosen": "A | B | C | D | E",
+    "option_reasoning": "why you chose this option — reference specific child outputs, flagged threads, and budget deployment rationale",
     "children_summary": [
         {{
             "worker_scope": "what this worker was asked",
             "observations_count": 3,
-            "key_evidence": "strongest observation in one sentence",
+            "data_originated_count": 2,
+            "confirmatory_count": 1,
+            "key_evidence": "strongest data-originated observation in one sentence",
+            "followup_threads_flagged": ["specific threads from child's self-assessment"],
             "gaps_flagged": "capability limits or self-eval gaps, if any",
             "zero_records": false,
             "purpose_aligned": true
@@ -1057,10 +1164,10 @@ Return JSON:
     ],
     "followup_children": [
         {{
-            "scope_description": "what to investigate",
-            "purpose": "why this child is needed",
+            "scope_description": "what to investigate — reference the specific thread or finding",
+            "purpose": "why this child is needed and what question it answers",
             "data_filter": {{}},
-            "parent_context": "evidence and context for this child",
+            "parent_context": "the original child's observations and the specific thread that motivated this",
             "budget": 0.10
         }}
     ],
@@ -1072,7 +1179,7 @@ Return JSON:
         }}
     ],
     "surplus_to_return": 0.00,
-    "surplus_reason": "why returning this amount"
+    "surplus_reason": "why returning this amount — must justify why no deployment option is valuable"
 }}
 
 Respond ONLY with valid JSON, no other text.

@@ -27,7 +27,10 @@ class WorkerNode:
 
     def __init__(self, directive: Directive, data_source, budget: float,
                  total_budget: float, parent_worker=None, lenses: list[str] = None,
-                 semaphore: asyncio.Semaphore = None, budget_pool=None):
+                 semaphore: asyncio.Semaphore = None, budget_pool=None,
+                 parent_pool_available: float = 0.0,
+                 depth: int = 0, max_depth: int = 3,
+                 leaf_viable_envelope: float = 0.12):
         self.directive = directive
         self.data_source = data_source
         self.budget = budget          # my allocation
@@ -37,6 +40,10 @@ class WorkerNode:
         self.lenses = lenses or []
         self._semaphore = semaphore or asyncio.Semaphore(3)
         self._budget_pool = budget_pool  # shared pool — check before every LLM call
+        self._parent_pool_available = parent_pool_available  # parent's pool at spawn time
+        self.depth = depth
+        self.max_depth = max_depth
+        self.leaf_viable_envelope = leaf_viable_envelope
 
         self.node_id = directive.node_id
         self.pos = directive.tree_position
@@ -53,14 +60,44 @@ class WorkerNode:
         self._diagnostics = {}        # raw data for diagnostic log
 
     @property
+    def envelope(self) -> float:
+        return self.budget
+
+    @property
+    def envelope_exhausted(self) -> bool:
+        # Can't afford even a minimal LLM call within envelope
+        return self.envelope - self.spent < 0.03
+
+    @property
     def surplus(self) -> float:
-        children_spent = sum(c.spent for c in self.child_workers)
-        return max(0, self.budget - self.spent - children_spent)
+        # Own unspent envelope + budget returned from children's unspent envelopes
+        own_remaining = max(0, self.envelope - self.spent)
+        returned_from_children = sum(
+            max(0, c.envelope - c.spent)
+            for c in self.child_workers
+        )
+        return own_remaining + returned_from_children
 
     # === Main lifecycle ===
 
     async def run(self) -> dict:
         """Execute the full worker lifecycle: explore → delegate → review → report."""
+        try:
+            return await self._run_inner()
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            self._log(f"EXCEPTION in run(): {e}\n{tb}")
+            self.status = "error"
+            events.emit("node_resolved", {
+                "node_id": self.node_id, "tree_position": self.pos,
+                "observations_count": len(self.observations), "cost_spent": self.spent,
+                "top_observation": f"ERROR: {e}",
+            })
+            raise
+
+    async def _run_inner(self) -> dict:
+        """Inner lifecycle — wrapped by run() for exception logging."""
         self.status = "exploring"
 
         # --- TURN 1: Survey + Orient + Assess ---
@@ -132,10 +169,33 @@ class WorkerNode:
 
         child_budget_each = remaining_for_children / max(1, n_children)
 
+        # Track rejections for diagnostics
+        self._spawn_rejections = []
+
         for i, cd in enumerate(child_directives, 1):
             child_budget = cd.get("budget", child_budget_each)
             child_budget = min(child_budget, remaining_for_children / max(1, n_children - i + 1))
             child_budget = max(0, child_budget)  # never negative
+
+            # Check 1: Depth cap
+            if self.depth + 1 > self.max_depth:
+                self._spawn_rejections.append({
+                    "scope": cd.get("scope_description", "")[:80],
+                    "reason": "depth_cap",
+                    "detail": f"depth {self.depth + 1} > max {self.max_depth}",
+                })
+                self._log(f"Rejected child: depth cap ({self.depth + 1} > {self.max_depth})")
+                continue
+
+            # Check 2: Envelope floor
+            if child_budget < self.leaf_viable_envelope:
+                self._spawn_rejections.append({
+                    "scope": cd.get("scope_description", "")[:80],
+                    "reason": "envelope_floor",
+                    "detail": f"${child_budget:.3f} < ${self.leaf_viable_envelope:.2f}",
+                })
+                self._log(f"Rejected child: envelope floor (${child_budget:.3f} < ${self.leaf_viable_envelope:.2f})")
+                continue
 
             # Use structured data_filter if LLM produced one; otherwise inherit parent's
             child_data_filter = cd.get("data_filter", {})
@@ -169,8 +229,25 @@ class WorkerNode:
                 lenses=self.lenses,
                 semaphore=self._semaphore,
                 budget_pool=self._budget_pool,
+                parent_pool_available=max(0, self.budget - self.spent),
+                depth=self.depth + 1,
+                max_depth=self.max_depth,
+                leaf_viable_envelope=self.leaf_viable_envelope,
             )
             self.child_workers.append(child)
+
+        # All children rejected — resolve with own observations
+        if not self.child_workers:
+            self.status = "resolved"
+            n_rejected = len(self._spawn_rejections)
+            self._log(f"All {n_rejected} children rejected (depth/floor). Resolving with {n_obs} observations.")
+            top_obs = self.observations[0].get("raw_evidence", "")[:80] if self.observations else ""
+            events.emit("node_resolved", {
+                "node_id": self.node_id, "tree_position": self.pos,
+                "observations_count": n_obs, "cost_spent": self.spent,
+                "top_observation": top_obs,
+            })
+            return self._result()
 
         # Run children concurrently
         self.status = "waiting_for_children"
@@ -185,7 +262,8 @@ class WorkerNode:
         ]
 
         # --- TURN 2: Review children's work ---
-        if self.child_results and self.surplus > 0.02:
+        review_has_budget = not self._budget_pool.review_exhausted if self._budget_pool else True
+        if self.child_results and review_has_budget:
             self.status = "reviewing"
             events.emit("node_status", {
                 "node_id": self.node_id, "tree_position": self.pos,
@@ -202,11 +280,11 @@ class WorkerNode:
                 # Store Turn 2 output for transcript
                 self._turn2_output = turn2
 
-                # Determine decision — v2 uses option_chosen, v1 uses continue_or_resolve
+                # Determine decision — v2 uses option_chosen (A-E), v1 uses continue_or_resolve
                 option = turn2.get("option_chosen", "").upper()
-                if option in ("B", "C"):
+                if option in ("A", "B", "C", "D"):
                     decision = "continue"
-                elif option == "A":
+                elif option == "E":
                     decision = "resolve"
                 else:
                     # v1 fallback
@@ -243,6 +321,13 @@ class WorkerNode:
 
         # --- Report to parent ---
         self.status = "complete"
+        top_obs = self.observations[0].get("raw_evidence", "")[:80] if self.observations else ""
+        events.emit("node_resolved", {
+            "node_id": self.node_id, "tree_position": self.pos,
+            "observations_count": len(self.observations), "cost_spent": self.spent,
+            "top_observation": top_obs,
+        })
+
         surplus = self.surplus
         if surplus > 0.01:
             events.emit("budget_returned", {
@@ -360,6 +445,26 @@ class WorkerNode:
         else:
             filter_schema_str = "No schema available."
 
+        # Compute parent and phase budget context
+        parent_pool = self._parent_pool_available
+        phase_remaining = 0.0
+        if self._budget_pool:
+            phase_remaining = self._budget_pool.exploration_remaining()
+
+        # Depth guidance
+        at_cap = self.depth >= self.max_depth
+        if at_cap:
+            depth_guidance = (
+                "You are at max depth. You cannot spawn children. "
+                "Produce observations directly from your scope and resolve."
+            )
+        else:
+            depth_guidance = (
+                f"When you spawn children, each must receive at least "
+                f"${self.leaf_viable_envelope:.2f}. The system will automatically "
+                f"reject spawns below this minimum."
+            )
+
         import datetime
         prompt = NODE_REASONING_PROMPT.format(
             current_date=datetime.date.today().isoformat(),
@@ -374,12 +479,21 @@ class WorkerNode:
             budget_stage=budget_stage,
             capacity_context=capacity,
             segment_context=f"- This segment is part of a ${self.total_budget:.2f} exploration pool.\n",
+            parent_pool_remaining=parent_pool,
+            phase_remaining=phase_remaining,
+            current_depth=self.depth,
+            max_depth=self.max_depth,
+            leaf_viable_envelope=self.leaf_viable_envelope,
+            depth_guidance=depth_guidance,
             doc_count=len(documents),
             fetched_data=anomaly_ctx + fetched_data,
             force_resolve=force_resolve,
         )
 
-        # Budget gate: check shared pool before LLM call
+        # Budget gate: check per-node envelope AND shared pool before LLM call
+        if self.envelope_exhausted:
+            self._log(f"Envelope exhausted (${self.spent:.3f} of ${self.envelope:.3f})")
+            return None
         if self._budget_pool and self._budget_pool.exploration_exhausted:
             return None
 
@@ -414,16 +528,21 @@ class WorkerNode:
                 "source": src,
                 "observation_type": obs_data.get("observation_type", "pattern"),
                 "confidence": obs_data.get("confidence", 0.5),
+                "confidence_rationale": obs_data.get("confidence_rationale", ""),
+                "signal_strength": obs_data.get("signal_strength", ""),
                 "surprising_because": obs_data.get("surprising_because", ""),
             })
 
-        # Capture self-evaluation
+        # Capture self-evaluation (including new v2 fields if present)
         self_eval = result.get("self_evaluation", {})
         self.metrics = {
             "purpose_addressed": self_eval.get("purpose_addressed", True),
             "purpose_gap": self_eval.get("purpose_gap", ""),
             "evidence_quality": self_eval.get("evidence_quality", "medium"),
             "budget_efficiency": 0.0,  # computed after all work completes
+            "worthwhile_followup_threads": self_eval.get("worthwhile_followup_threads", []),
+            "capability_gaps": self_eval.get("capability_gaps", []),
+            "adjacent_findings": self_eval.get("adjacent_findings", []),
         }
 
         return {
@@ -444,6 +563,7 @@ class WorkerNode:
         for child, result in zip(self.child_workers, self.child_results):
             if not isinstance(result, dict):
                 continue
+            child_metrics = result.get("self_evaluation", child.metrics)
             children_summary.append({
                 "scope": child.directive.scope.description[:100],
                 "purpose": child.directive.purpose[:100] if child.directive.purpose else "",
@@ -453,7 +573,10 @@ class WorkerNode:
                 "cost": round(child.spent, 3),
                 "surplus": round(child.surplus, 3),
                 "status": child.status,
-                "self_evaluation": result.get("self_evaluation", child.metrics),
+                "self_evaluation": child_metrics,
+                "worthwhile_followup_threads": child_metrics.get("worthwhile_followup_threads", []),
+                "capability_gaps": child_metrics.get("capability_gaps", []),
+                "adjacent_findings": child_metrics.get("adjacent_findings", []),
                 "zero_records": child._diagnostics.get("data_received", {}).get("record_count", -1) == 0,
                 "thinking_excerpt": child.thinking_log[0]["thinking"][:200] if child.thinking_log else "",
             })
@@ -498,15 +621,30 @@ class WorkerNode:
                 break
 
             child_budget = min(fd.get("budget", 0.10), self.surplus * 0.8)
+
+            # Depth cap check for followups too
+            if self.depth + 1 > self.max_depth:
+                self._log(f"Followup rejected: depth cap ({self.depth + 1} > {self.max_depth})")
+                continue
+
+            # Envelope floor check
+            if child_budget < self.leaf_viable_envelope:
+                self._log(f"Followup rejected: envelope floor (${child_budget:.3f} < ${self.leaf_viable_envelope:.2f})")
+                continue
+
+            child_filters = fd.get("data_filter", fd.get("filters", {}))
+            if not child_filters or not isinstance(child_filters, dict):
+                child_filters = {"keyword": fd.get("scope_description", "")[:30]}
             child_directive = Directive(
                 scope=Scope(
                     source=self.directive.scope.source,
-                    filters=fd.get("filters", {"keyword": fd.get("scope_description", "")[:30]}),
+                    filters=child_filters,
                     description=fd.get("scope_description", ""),
                 ),
                 lenses=self.lenses,
                 parent_context=fd.get("parent_context", "Follow-up investigation"),
                 purpose=fd.get("purpose", fd.get("parent_context", "Follow-up investigation")),
+                data_filter=child_filters,
                 node_id=str(uuid.uuid4()),
                 parent_id=self.node_id,
                 tree_position=f"{self.pos}.F{i}",
@@ -523,6 +661,10 @@ class WorkerNode:
                 lenses=self.lenses,
                 semaphore=self._semaphore,
                 budget_pool=self._budget_pool,
+                parent_pool_available=self.surplus,
+                depth=self.depth + 1,
+                max_depth=self.max_depth,
+                leaf_viable_envelope=self.leaf_viable_envelope,
             )
             self.child_workers.append(child)
 
@@ -601,12 +743,19 @@ class WorkerNode:
                 "purpose_addressed": self_eval.get("purpose_addressed", None),
                 "evidence_quality": self_eval.get("evidence_quality", None),
                 "purpose_gap": self_eval.get("purpose_gap", ""),
+                "worthwhile_followup_threads": self_eval.get("worthwhile_followup_threads", []),
+                "capability_gaps": self_eval.get("capability_gaps", []),
+                "adjacent_findings": self_eval.get("adjacent_findings", []),
             },
             "budget": {
-                "allocated": round(self.budget, 3),
+                "envelope": round(self.envelope, 3),
                 "spent": round(self.spent, 3),
-                "returned": round(self.surplus, 3),
+                "surplus": round(self.surplus, 3),
+                "envelope_exhausted": self.envelope_exhausted,
+                "depth": self.depth,
+                "max_depth": self.max_depth,
             },
+            "spawn_rejections": getattr(self, '_spawn_rejections', []),
             "decision": "decomposed" if self.child_workers else "resolved",
             "decision_reasoning": assess_reasoning[:300],
         }
@@ -632,6 +781,7 @@ class WorkerNode:
             "child_results": self.child_results,
             "status": self.status,
             "metrics": self.metrics,
+            "self_evaluation": self.metrics,  # alias for children_summary access
             "token_usage": self.token_usage,
             "diagnostic": self._build_diagnostic(),
         }

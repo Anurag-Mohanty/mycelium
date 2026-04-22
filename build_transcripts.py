@@ -77,6 +77,36 @@ def build_node_transcript(run_id, node_data, diag_data, events, tree_data):
     lines.append(purpose or "[not recorded in this run's diagnostics]")
     lines.append("")
 
+    # Budget envelope
+    budget_info = diag_data.get("budget", {})
+    if budget_info:
+        envelope = budget_info.get("envelope", budget_info.get("allocated", "?"))
+        spent = budget_info.get("spent", "?")
+        surplus = budget_info.get("surplus", budget_info.get("returned", "?"))
+        exhausted = budget_info.get("envelope_exhausted", False)
+        depth = budget_info.get("depth", "?")
+        max_depth = budget_info.get("max_depth", "?")
+        lines.append(f"### Budget Envelope")
+        lines.append(f"- Envelope: ${envelope}")
+        lines.append(f"- Spent: ${spent}")
+        lines.append(f"- Surplus: ${surplus}")
+        lines.append(f"- Depth: {depth} / max {max_depth}")
+        if exhausted:
+            lines.append(f"- **ENVELOPE EXHAUSTED**")
+        if depth != "?" and max_depth != "?" and depth >= max_depth:
+            lines.append(f"- **AT DEPTH CAP — cannot decompose**")
+        lines.append("")
+
+    # Spawn rejections
+    rejections = diag_data.get("spawn_rejections", [])
+    if rejections:
+        lines.append(f"### Spawn Rejections ({len(rejections)} children rejected)")
+        for rej in rejections:
+            lines.append(f"- **{rej.get('reason', '?')}**: {rej.get('scope', '?')[:80]}")
+            if rej.get("detail"):
+                lines.append(f"  {rej['detail']}")
+        lines.append("")
+
     # Data received
     data_info = diag_data.get("data_received", {})
     lines.append("### Data Received")
@@ -214,15 +244,81 @@ def build_node_transcript(run_id, node_data, diag_data, events, tree_data):
             lines.append(f"\nFetch returned 0 records. Filter: `{fetch_result.get('filter_used', '?')}`")
     lines.append("")
 
-    # Self-evaluation
+    # Self-evaluation / Self-assessment
     se = diag_data.get("self_evaluation", {})
-    lines.append("### Self-Evaluation")
+    # Also check node_data metrics for v2 fields
+    node_metrics = node_data.get("metrics", node_data.get("self_evaluation", {}))
+    lines.append("### Self-Assessment")
     if se and any(v is not None for v in se.values()):
-        lines.append(f"- Purpose addressed: {se.get('purpose_addressed', '?')}")
-        lines.append(f"- Evidence quality: {se.get('evidence_quality', '?')}")
+        lines.append(f"- **Purpose addressed:** {se.get('purpose_addressed', '?')}")
+        lines.append(f"- **Evidence quality:** {se.get('evidence_quality', '?')}")
         gap = se.get("purpose_gap", "")
         if gap:
-            lines.append(f"- Gap: {gap}")
+            lines.append(f"- **Gap:** {gap}")
+
+        # Signal strength summary (from observations)
+        obs_list = node_data.get("observations", [])
+        data_originated = []
+        confirmatory = []
+        for idx, obs in enumerate(obs_list):
+            signal = obs.get("signal_strength", "")
+            desc = obs.get("raw_evidence", "")[:60]
+            if signal == "data_originated":
+                data_originated.append(f"[{idx+1}] {desc}")
+            elif signal == "confirmatory":
+                confirmatory.append(f"[{idx+1}] {desc}")
+        if data_originated or confirmatory:
+            lines.append("")
+            lines.append("**Observations by signal strength:**")
+            if data_originated:
+                lines.append(f"- Data-originated: {', '.join(data_originated)}")
+            if confirmatory:
+                lines.append(f"- Confirmatory: {', '.join(confirmatory)}")
+
+        # Confidence rationale per observation
+        has_rationale = any(obs.get("confidence_rationale") for obs in obs_list)
+        if has_rationale:
+            lines.append("")
+            lines.append("**Observation confidence:**")
+            for idx, obs in enumerate(obs_list):
+                conf = obs.get("confidence", "?")
+                rationale = obs.get("confidence_rationale", "")
+                if rationale:
+                    lines.append(f"- [{idx+1}] confidence={conf}: {rationale[:150]}")
+
+        # Worthwhile follow-up threads
+        threads = node_metrics.get("worthwhile_followup_threads", [])
+        if threads:
+            lines.append("")
+            lines.append("**Worthwhile follow-up threads:**")
+            for t in threads:
+                if isinstance(t, dict):
+                    lines.append(f"- {t.get('what_to_investigate', '?')}")
+                    if t.get("question_it_answers"):
+                        lines.append(f"  Answers: {t['question_it_answers'][:120]}")
+                    if t.get("scope_estimate"):
+                        lines.append(f"  Scope: {t['scope_estimate']}")
+                else:
+                    lines.append(f"- {str(t)[:150]}")
+        elif node_metrics.get("worthwhile_followup_threads") == []:
+            lines.append("")
+            lines.append("**Worthwhile follow-up threads:** none flagged")
+
+        # Capability gaps
+        gaps = node_metrics.get("capability_gaps", [])
+        if gaps:
+            lines.append("")
+            lines.append("**Capability gaps:**")
+            for g in gaps:
+                lines.append(f"- {str(g)[:150]}")
+
+        # Adjacent findings (from self-assessment)
+        adj = node_metrics.get("adjacent_findings", [])
+        if adj:
+            lines.append("")
+            lines.append("**Adjacent findings (outside scope):**")
+            for a in adj:
+                lines.append(f"- {str(a)[:150]}")
     else:
         lines.append("[not recorded in this run's diagnostics]")
     lines.append("")
@@ -261,13 +357,22 @@ def build_node_transcript(run_id, node_data, diag_data, events, tree_data):
                     aligned = cs.get("purpose_aligned", "?")
                     assessment = cs.get("assessment", cs.get("key_evidence", ""))
                     obs_count = cs.get("observations_count", "?")
+                    data_orig = cs.get("data_originated_count", "")
+                    confirm = cs.get("confirmatory_count", "")
                     zero = cs.get("zero_records", False)
                     gaps = cs.get("gaps_flagged", "")
-                    lines.append(f"- **{scope[:60]}**: {obs_count} obs, aligned={aligned}"
+                    signal_info = ""
+                    if data_orig or confirm:
+                        signal_info = f", signal: {data_orig}D/{confirm}C"
+                    lines.append(f"- **{scope[:60]}**: {obs_count} obs{signal_info}, aligned={aligned}"
                                  + (f", zero_records" if zero else "")
                                  + (f", gaps: {gaps[:80]}" if gaps else ""))
                     if assessment:
                         lines.append(f"  {assessment[:150]}")
+                    # Follow-up threads flagged by child
+                    threads = cs.get("followup_threads_flagged", [])
+                    if threads:
+                        lines.append(f"  Follow-up threads: {', '.join(str(t)[:60] for t in threads[:3])}")
                 lines.append("")
 
             # Adjacent findings
@@ -594,6 +699,46 @@ def process_run(run_id, output_dir="output"):
         with open(transcript_dir / f"{short_id}.md", "w") as f:
             f.write(transcript)
         transcript_count += 1
+
+    # Build combined transcript — all nodes in one file, sorted by tree position
+    combined_lines = []
+    combined_lines.append(f"# Full Transcript: Run {run_id}")
+    combined_lines.append("")
+
+    # Sort nodes by tree position for reading order
+    def _sort_key(nid):
+        nd = nodes.get(nid, {})
+        dd = diags.get(nid, {})
+        pos = nd.get("tree_position") or dd.get("tree_position") or "ZZZ"
+        # Sort numerically: "1" < "2" < "1.1" < "1.2" < "1.F1"
+        parts = []
+        for p in pos.replace("F", ".F").split("."):
+            try:
+                parts.append((0, int(p)))
+            except ValueError:
+                parts.append((1, p))
+        return parts
+
+    sorted_ids = sorted(all_node_ids, key=_sort_key)
+
+    for node_id in sorted_ids:
+        node_data = nodes.get(node_id, {})
+        diag_data = diags.get(node_id, {})
+        if not node_data and not diag_data:
+            continue
+        if not node_data.get("node_id"):
+            node_data["node_id"] = node_id
+        if not diag_data.get("node_id"):
+            diag_data["node_id"] = node_id
+
+        transcript = build_node_transcript(run_id, node_data, diag_data, events, tree)
+        combined_lines.append(transcript)
+        combined_lines.append("")
+        combined_lines.append("---")
+        combined_lines.append("")
+
+    with open(run_dir / "full_transcript.md", "w") as f:
+        f.write("\n".join(combined_lines))
 
     # Build dashboard
     dashboard = build_dashboard(run_id, run_dir)

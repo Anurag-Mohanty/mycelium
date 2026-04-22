@@ -6,9 +6,9 @@ Release an autonomous explorer into any information space with a budget. It deci
 
 ## What It Found
 
-**SEC EDGAR** (3,891 filings, $5 budget): Berkshire Hathaway Energy expanded risk factors from 11,014 to 148,988 words citing "PacifiCorp litigation risks." Amplify Energy shrank from 66,155 to 34,381 after their pipeline incident resolved. XTI Aerospace files under SIC 7371 (Computer Programming) but discloses 22,492 words of aerospace risk content — SIC codes lag actual business models. Found by reading actual 10-K text across 3,886 companies.
+**SEC EDGAR** (26,495 filings from 6,966 companies, $5 budget): Extreme Networks eliminated 100% of risk factor disclosures between 2022 and 2023 (13,028 words → 0). Flagstar Bank's 2023 filing uses NYCB accession numbers and URL patterns (`nycb-20221231.htm`), revealing a corporate acquisition mid-filing-cycle. Computer Communications Equipment companies (SIC 3576) showed coordinated 77% reductions in risk disclosures. Found by cross-referencing 10-K filings across years, accession numbers, and SIC codes.
 
-**npm Registry** (100K packages, $10 budget): @vue/shared (80.9M downloads) outperforms the main vue package (46M) — internal utility exceeds its own framework. @segment/analytics-next has 335 maintainers while Vue core has 1. expo, Supabase, and @typescript-eslint/scope-manager all show 0 monthly downloads despite millions of real users — npm tracking system failures. Found by analyzing metadata across 100K enriched packages.
+**npm Registry** (100,726 packages, $10 budget): Jon Schlinkert controls 1+ billion monthly downloads across 3 utility packages — a single individual as critical infrastructure. React core packages show synchronized version patterns with identical git hashes and timestamps across packages, proving automated CI/CD publishing rather than API instability. @flmngr packages exhibit artificial download inflation patterns across coordinated namespace. Found by analyzing metadata, maintainer concentration, and version patterns across 100K enriched packages.
 
 These findings require reading primary data and comparing across entities and time. No web search produces them.
 
@@ -18,11 +18,14 @@ These findings require reading primary data and comparing across entities and ti
 pip install -r requirements.txt
 export ANTHROPIC_API_KEY=your_key
 
-# Explore npm packages
+# Explore npm packages ($5-10 recommended)
 python3 run.py --source npm --budget 10 --visualize
 
 # Explore SEC filings
-python3 run.py --source sec --budget 10 --visualize
+python3 run.py --source sec --budget 5 --visualize
+
+# Use v2 prompts (budget-aware reasoning, self-assessment, continuation funding)
+python3 run.py --source npm --budget 10 --prompts v2
 
 # Headless run
 python3 run.py --source npm --budget 5
@@ -40,12 +43,15 @@ CATALOG (free)      Statistical survey of all records. 10 analytical techniques.
      |
 GENESIS ($0.05)     LLM surveys corpus shape, generates attention lenses.
      |
-PLANNER ($0.05)     Budget-aware exploration strategy. Segments with sub-budgets.
+PLANNER ($0.05)     Budget-aware exploration strategy. Reasons about exploration
+                    envelope (40-75% of budget) and max decomposition depth from
+                    leaf viability math.
      |
 EXPLORE ($$$)       WorkerNode agents — persistent, multi-turn, self-decomposing.
-  |   |   |         Each receives PURPOSE + TARGETS + DATA.
-  |   |   |         Produces EVIDENCE PACKETS, not prose summaries.
-  |   |   |         Self-evaluates before reporting. Parent reviews alignment.
+  |   |   |         Each receives PURPOSE + TARGETS + DATA + BUDGET CONTEXT.
+  |   |   |         Produces EVIDENCE PACKETS with signal strength classification.
+  |   |   |         Self-assesses: follow-up threads, capability gaps, adjacent findings.
+  |   |   |         Parent reviews and deploys remaining budget to continuations.
   |   |   |
 SYNTHESIZE          Cross-references findings across branches.
      |
@@ -55,7 +61,7 @@ VALIDATE            Skeptical review of Tier 3-5 findings.
      |
 IMPACT              Real-world consequence assessment.
      |
-REPORT              Five-tier markdown report + run metrics.
+REPORT              Five-tier markdown report + run metrics + full transcript.
 ```
 
 Every node runs: **Survey, Orient, Hypothesize, Assess Coverage, Produce**. Nodes receive a purpose, self-evaluate their output, and parents review whether children delivered what was asked. The code is plumbing. The LLM makes all decisions.
@@ -65,17 +71,28 @@ Every node runs: **Survey, Orient, Hypothesize, Assess Coverage, Produce**. Node
 Every node operates like an employee in an organization:
 
 - **Receives PURPOSE** — not just scope and data, but why it's being asked and how it fits the broader investigation
+- **Receives BUDGET CONTEXT** — own envelope, parent's remaining pool, phase remaining, depth position, minimum child envelope
 - **Produces EVIDENCE PACKETS** — structured data (raw_evidence, statistical_grounding, local_hypothesis, surprising_because), not prose summaries
-- **Self-evaluates** — before reporting, asks "did I address my purpose or miss the point?"
-- **Parent reviews** — Turn 2 evaluates whether each child delivered what was needed
-- **Metrics tracked** — budget efficiency, purpose alignment, evidence quality per node
+- **Classifies SIGNAL STRENGTH** — each observation marked as `data_originated` (required reading the data) or `confirmatory` (an informed observer would have expected this)
+- **Self-assesses** — purpose addressed, evidence quality, worthwhile follow-up threads, capability gaps, adjacent findings outside scope
+- **Parent reviews (Turn 2)** — five-option budget deployment: fund continuation on flagged thread, fund adjacent finding, spawn more, pivot, or resolve
+- **Metrics tracked** — budget efficiency, purpose alignment, evidence quality, envelope utilization per node
+
+## Budget Architecture (v2 prompts)
+
+- **Planner-determined exploration envelope** — 40-75% of total budget, reasoned from corpus complexity
+- **Planner-computed max depth** — derived from leaf viability math, not arbitrary limits
+- **Per-node envelope caps** — children can't silently overspend their allocation
+- **Envelope floor** — children below minimum viable cost ($0.12) are rejected at spawn
+- **Review phase** — separate 15% budget for Turn 2 reviews, independent of exploration surplus
+- **Continuation funding** — parents deploy unspent envelope to follow-up children via Option A
 
 ## Data Sources
 
 | Source | Coverage | Auth | Enrichment |
 |--------|----------|------|------------|
 | npm Registry | 3.97M packages, 100K enriched with full metadata | None | Cached (~4 hours first time) |
-| SEC EDGAR | 41K+ 10-K filings, risk factor extraction across 2021-2026 | None (User-Agent) | Cached (~50 min first time) |
+| SEC EDGAR | 26,495 10-K filings from 6,966 companies, risk factor extraction across 2021-2026 | None (User-Agent) | Cached (~50 min first time) |
 | Federal Register | US federal regulations | None | On-demand |
 
 Adding a new source: implement `survey()`, `fetch()`, `fetch_bulk_metadata()`, and `close()`. See `mycelium/data_sources/base.py`.
@@ -117,27 +134,31 @@ Records flagged by 2+ techniques become numbered **INVESTIGATION TARGETS** with 
 
 ```
 mycelium/
-  orchestrator.py      # Full pipeline coordinator + run metrics
-  worker.py            # WorkerNode — persistent multi-turn agent with diagnostics
-  node.py              # Single-call reasoning primitive
+  orchestrator.py      # Full pipeline coordinator + run metrics + envelope enforcement
+  worker.py            # WorkerNode — persistent multi-turn agent with envelope caps
+  node.py              # Single-call reasoning primitive (legacy)
   genesis.py           # Corpus survey + lens generation
-  planner.py           # Budget-aware exploration strategy
+  planner.py           # Budget-aware strategy + exploration envelope + depth computation
   survey.py            # AnalyticalSurvey (10 techniques, sklearn/pandas)
   synthesizer.py       # Cross-reference sibling observations
   validator.py         # Skeptical review
   significance.py      # Novelty + actionability scoring
   impact.py            # Real-world impact assessment
   reporter.py          # Five-tier markdown report
-  prompts.py           # All LLM prompts (centralized)
-  schemas.py           # All data structures (Directive with purpose field)
+  prompts.py           # Prompt version dispatcher (v1/v2)
+  prompts_v1.py        # Original prompts (baseline, never modified)
+  prompts_v2.py        # v2 prompts (budget-aware reasoning, self-assessment, 5-option Turn 2)
+  schemas.py           # All data structures (Directive, BudgetPool with phase limits)
   events.py            # WebSocket + events.jsonl recording
   knowledge_graph.py   # SQLite-backed persistent graph
   data_sources/
-    base.py            # DataSource interface
+    base.py            # DataSource interface + filter_schema()
     npm_registry.py    # npm (public, no key)
     sec_edgar.py       # SEC EDGAR (public, User-Agent header)
     federal_register.py
+run.py                 # CLI entry point (--source, --budget, --prompts v1|v2, --visualize)
 catalog.py             # Full registry catalog builder
+build_transcripts.py   # Per-node + combined transcripts + dashboards
 visualizer.html        # D3.js real-time tree visualization
 ```
 
@@ -146,14 +167,17 @@ visualizer.html        # D3.js real-time tree visualization
 Each run produces `output/{run_id}/` containing:
 
 - `report.md` — Five-tier markdown report (Common Knowledge, Structural Insights, Contradictions, Gaps, Cross-Cutting Patterns)
-- `metrics.json` — Cost, quality, efficiency, token usage, data coverage metrics
+- `metrics.json` — Cost, quality, efficiency, token usage, planner decisions, data coverage
+- `full_transcript.md` — Combined transcript of all nodes in tree order (one file, scrollable)
+- `dashboard.md` — Run summary with node index and diagnostic aggregates
 - `tree.json` — Full exploration tree with all observations
 - `events.jsonl` — Event stream for playback
 - `knowledge_graph.json` — Entity/relationship graph
-- `nodes/` — Per-node reasoning logs (full thinking + observations)
-- `diagnostics/` — Per-node diagnostic logs (input data, targets received, output quality, budget)
+- `nodes/` — Per-node JSON (observations, thinking, Turn 2 review, self-assessment, metrics)
+- `diagnostics/` — Per-node diagnostic logs (input data, targets, output quality, envelope, rejections)
+- `transcripts/` — Per-node markdown transcripts
 
-Run history is appended to `catalog/run_history.jsonl` for cross-run comparison.
+Run history is appended to `catalog/run_history.jsonl` for cross-run comparison. Generate transcripts for any run with `python3 build_transcripts.py {run_id}`.
 
 ## Diagnostics
 
@@ -176,9 +200,9 @@ Per-node diagnostics at `output/{run_id}/diagnostics/` show exactly what each no
 
 - Model: Claude Sonnet ($3/M input, $15/M output)
 - Extended thinking: 5000 token budget per node
-- Typical $5 run: ~30 nodes, ~60 observations, depth 3-4
-- Typical $10 run: ~45 nodes, ~180 observations, depth 4+
-- Run metrics track cost per observation, cost per validated finding, budget waste on zero-observation nodes
+- Typical $5 run (v2): ~20 nodes, ~50-60 observations, depth 2, 70-75% utilization
+- Typical $10 run (v2): ~50 nodes, ~70-100 observations, depth 2-3, 75-85% utilization
+- Run metrics track cost per observation, cost per validated finding, envelope utilization, spawn rejections
 
 ## Core Principle
 

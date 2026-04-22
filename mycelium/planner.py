@@ -20,24 +20,40 @@ async def create_plan(genesis_result: dict, total_budget: float) -> dict:
     Returns:
         Plan dict with segments, sub-budgets, depth targets, deep-dive strategy
     """
+    from . import prompts as _prompts
+
+    lenses = genesis_result.get("lenses", [])
     exploration_budget = total_budget * 0.50
     estimated_nodes = int(exploration_budget / 0.04)
 
-    prompt = PLANNER_PROMPT.format(
-        genesis_output=json.dumps({
-            "corpus_summary": genesis_result.get("corpus_summary", ""),
-            "lenses": genesis_result.get("lenses", []),
-            "suggested_entry_points": genesis_result.get("suggested_entry_points", []),
-            "natural_structure": genesis_result.get("natural_structure", {}),
-        }, indent=2),
-        budget=total_budget,
-        exploration_budget=exploration_budget,
-        synthesis_budget=total_budget * 0.18,
-        deep_dive_budget=total_budget * 0.08,
-        validation_budget=total_budget * 0.07,
-        overhead_budget=total_budget * 0.07,
-        estimated_nodes=estimated_nodes,
-    )
+    genesis_json = json.dumps({
+        "corpus_summary": genesis_result.get("corpus_summary", ""),
+        "lenses": lenses,
+        "suggested_entry_points": genesis_result.get("suggested_entry_points", []),
+        "natural_structure": genesis_result.get("natural_structure", {}),
+    }, indent=2)
+
+    # v2 planner gets envelope reasoning params; v1 gets static allocation params
+    if _prompts.get_version() == "v2":
+        from .orchestrator import LEAF_VIABLE_ENVELOPE
+        prompt = PLANNER_PROMPT.format(
+            genesis_output=genesis_json,
+            budget=total_budget,
+            num_lenses=len(lenses),
+            review_budget=total_budget * 0.15,
+            leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
+        )
+    else:
+        prompt = PLANNER_PROMPT.format(
+            genesis_output=genesis_json,
+            budget=total_budget,
+            exploration_budget=exploration_budget,
+            synthesis_budget=total_budget * 0.18,
+            deep_dive_budget=total_budget * 0.08,
+            validation_budget=total_budget * 0.07,
+            overhead_budget=total_budget * 0.07,
+            estimated_nodes=estimated_nodes,
+        )
 
     client = anthropic.Anthropic()
     response = client.messages.create(

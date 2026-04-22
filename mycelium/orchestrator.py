@@ -28,6 +28,11 @@ from .genesis import run_genesis
 from .planner import create_plan
 from .survey import ProgrammaticSurvey
 from .node import run_node
+
+# Minimum envelope for a productive leaf node. Roughly one Turn 1 with reduced
+# thinking budget at current Sonnet pricing ($3/M in, $15/M out). Update if
+# model pricing changes significantly.
+LEAF_VIABLE_ENVELOPE = 0.12
 from .worker import WorkerNode
 from .synthesizer import synthesize
 from .validator import validate_finding
@@ -299,6 +304,54 @@ class Orchestrator:
             "deep_dive_strategy": self.plan.get("deep_dive_strategy", ""),
         })
 
+        # --- Read planner's exploration envelope (v2) or use static default ---
+        envelope_info = self.plan.get("exploration_envelope", {})
+        if envelope_info and envelope_info.get("percentage"):
+            raw_pct = envelope_info["percentage"]
+            clamped_pct = max(0.40, min(0.75, raw_pct))
+            if clamped_pct != raw_pct:
+                print(f"  [PLANNER] WARNING: exploration envelope {raw_pct:.0%} clamped to {clamped_pct:.0%}")
+            self.budget.phase_limits["exploration"] = clamped_pct
+            self._planner_envelope = {
+                "exploration_envelope_pct": round(clamped_pct, 3),
+                "exploration_envelope_dollars": round(self.budget.total * clamped_pct, 2),
+                "reasoning": envelope_info.get("reasoning", ""),
+                "raw_pct": round(raw_pct, 3),
+                "clamped": clamped_pct != raw_pct,
+            }
+            print(f"  [PLANNER] Exploration envelope: {clamped_pct:.0%} = "
+                  f"${self.budget.total * clamped_pct:.2f}")
+        else:
+            self._planner_envelope = {
+                "exploration_envelope_pct": self.budget.phase_limits["exploration"],
+                "exploration_envelope_dollars": round(
+                    self.budget.total * self.budget.phase_limits["exploration"], 2),
+                "reasoning": "default (planner did not specify)",
+                "raw_pct": self.budget.phase_limits["exploration"],
+                "clamped": False,
+            }
+
+        # --- Read planner's max decomposition depth (v2) ---
+        depth_info = self.plan.get("max_decomposition_depth", {})
+        if isinstance(depth_info, dict) and depth_info.get("depth"):
+            raw_depth = depth_info["depth"]
+            self._max_depth = max(2, min(6, raw_depth))
+            if self._max_depth != raw_depth:
+                print(f"  [PLANNER] WARNING: max depth {raw_depth} clamped to {self._max_depth}")
+            self._planner_envelope["max_decomposition_depth"] = self._max_depth
+            self._planner_envelope["depth_reasoning"] = depth_info.get("reasoning", "")
+            self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
+            print(f"  [PLANNER] Max decomposition depth: {self._max_depth} "
+                  f"(leaf viable: ${LEAF_VIABLE_ENVELOPE:.2f})")
+        elif isinstance(depth_info, (int, float)):
+            self._max_depth = max(2, min(6, int(depth_info)))
+            self._planner_envelope["max_decomposition_depth"] = self._max_depth
+            self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
+        else:
+            self._max_depth = 3  # sensible default
+            self._planner_envelope["max_decomposition_depth"] = self._max_depth
+            self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
+
         # --- Phase 2: Exploration ---
         print(f"\n  {'─'*54}")
         print(f"  PHASE 1: EXPLORATION")
@@ -370,6 +423,10 @@ class Orchestrator:
                 lenses=lenses,
                 semaphore=self._semaphore,
                 budget_pool=self.budget,
+                parent_pool_available=self.budget.exploration_remaining(),
+                depth=0,
+                max_depth=self._max_depth,
+                leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
             )
             segment_workers.append(worker)
 
@@ -732,6 +789,10 @@ class Orchestrator:
                 lenses=lenses,
                 semaphore=self._semaphore,
                 budget_pool=self.budget,
+                parent_pool_available=self.budget.deep_dive_available(),
+                depth=0,
+                max_depth=self._max_depth,
+                leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
             )
             worker_result = await worker.run()
 
@@ -1039,6 +1100,7 @@ Respond ONLY with a JSON array."""}],
                 "node_id": worker.node_id,
                 "parent_id": worker.directive.parent_id,
                 "scope_description": worker.directive.scope.description,
+                "tree_position": worker.pos,
                 "survey": "",
                 "observations": worker.observations,
                 "child_directives_count": len(worker.child_workers),
@@ -1047,6 +1109,7 @@ Respond ONLY with a JSON array."""}],
                 "thinking_log": worker.thinking_log,  # preserve turn-level structure
                 "thinking": "\n\n".join(t.get("thinking", "") for t in worker.thinking_log),  # backward compat
                 "turn2_review": getattr(worker, '_turn2_output', None),  # structured Turn 2 output
+                "metrics": worker.metrics,  # self-assessment: signal strength, follow-up threads, etc.
                 "token_usage": {},
                 "cost": worker.spent,
             }
@@ -1595,6 +1658,16 @@ Respond ONLY with a JSON array."""}],
         self_eval_gaps = sum(1 for w in all_workers
                             if not w.metrics.get("purpose_addressed", True))
 
+        # Count spawn rejections
+        depth_cap_rejections = 0
+        envelope_floor_rejections = 0
+        for w in all_workers:
+            for rej in getattr(w, '_spawn_rejections', []):
+                if rej.get("reason") == "depth_cap":
+                    depth_cap_rejections += 1
+                elif rej.get("reason") == "envelope_floor":
+                    envelope_floor_rejections += 1
+
         # Count validated findings
         confirmed = sum(1 for v in self.all_validations if v.verdict == "confirmed")
         weakened = sum(1 for v in self.all_validations if v.verdict == "weakened")
@@ -1644,6 +1717,8 @@ Respond ONLY with a JSON array."""}],
                 "nodes_decomposed": self.stats.nodes_spawned - self.stats.nodes_resolved,
                 "max_depth": self.stats.max_depth_reached,
                 "avg_branching_factor": round(self.stats.avg_branching_factor, 2),
+                "depth_cap_rejections": depth_cap_rejections,
+                "envelope_floor_rejections": envelope_floor_rejections,
                 "deep_dives": self.stats.deep_dives_executed,
             },
             "tokens": {
@@ -1658,6 +1733,7 @@ Respond ONLY with a JSON array."""}],
                 "records_enriched": enriched_count,
                 "records_analyzed_by_survey": enriched_count,
             },
+            "planner_decisions": getattr(self, '_planner_envelope', {}),
         }
 
         # Write metrics.json
