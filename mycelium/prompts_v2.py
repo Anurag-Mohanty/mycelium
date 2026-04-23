@@ -318,6 +318,8 @@ YOUR PURPOSE (why you're being asked to investigate this):
 CONTEXT FROM YOUR MANAGER (if any):
 {parent_context}
 
+{briefing_context}
+
 YOUR ASSIGNED AREA:
 {scope_description}
 
@@ -387,11 +389,19 @@ substance is. What patterns do you notice? What's concentrated? What's sparse? \
 What's inconsistent? What changed over time? What surprises you? What would you \
 expect to see that's missing? What relationships or dependencies seem fragile?
 
+When identifying interesting patterns, check against the Common Knowledge briefing \
+(if provided above). Patterns the briefing already covers are not interesting \
+unless you're finding a significant deviation or contradiction.
+
 Develop your curiosity from what you actually observe, not from prior expectations.
 
 STEP 3 — HYPOTHESIZE
 Based on what you noticed, what might be true? What might be hiding here? Form \
-hypotheses. Each should:
+hypotheses about patterns that are genuinely novel relative to the briefing. If a \
+pattern would fit in the Common Knowledge briefing, do not hypothesize further \
+about it — note it as confirmatory and move on.
+
+Each hypothesis should:
 - State what you suspect
 - Point to the specific evidence that triggered the suspicion
 - Describe what would confirm or deny it
@@ -479,7 +489,7 @@ Produce a JSON object with this exact structure:
             "observation_type": "definition | pattern | anomaly | absence | temporal_shift | concentration | contradiction_signal | dependency_risk | single_point_of_failure",
             "confidence": 0.85,
             "confidence_rationale": "why you are this confident — name any uncertainties (thin evidence, single data point, possible alternative explanations)",
-            "signal_strength": "data_originated | confirmatory",
+            "signal_strength": "data_originated_novel | data_originated_confirmatory | confirmatory",
             "surprising_because": "what you would EXPECT to see and how this differs"
         }}
     ],
@@ -529,8 +539,10 @@ or flag the gap in self_evaluation.purpose_gap.
 - Rate your evidence_quality: "high" if every observation cites specific data \
 values from the records, "low" if your observations are generic descriptions \
 that could be written without reading the data.
-- For each observation, did you honestly set signal_strength? Observations \
-about well-known facts are "confirmatory" even with specific numbers.
+- For each observation, did you honestly set signal_strength? Three levels:
+  "data_originated_novel" = required the data AND not covered by the briefing.
+  "data_originated_confirmatory" = required the data BUT restates something in the briefing.
+  "confirmatory" = would be expected without reading the data at all.
 - For each observation, did you name your uncertainties in confidence_rationale?
 - Are your worthwhile_followup_threads specific enough that a parent could \
 spawn a targeted continuation from each one? If not, revise or remove them.
@@ -569,6 +581,22 @@ examining different areas. Here are their reports:
 
 ATTENTION LENSES:
 {lenses}
+
+CITATION DISCIPLINE (read before proceeding):
+Every claim in a contradiction or pattern MUST cite specific data points from \
+the worker observations. Specifically:
+- The observation field must include the SPECIFIC DATA the worker found: actual \
+numbers, entity names, dates, exact text — not a paraphrased summary.
+- The source field must include the original observation's source identifier \
+(doc_id, URL, or equivalent), not just a topic name.
+- For each piece of evidence in a cross-cutting pattern, cite the specific \
+observation with its source identifier.
+
+If the supporting observations from workers do not contain specific data points \
+(only prose impressions), DO NOT synthesize them into a finding. Findings without \
+verifiable specifics waste downstream validation effort and produce unfalsifiable \
+claims. Fewer findings with specific evidence are better than many findings with \
+vague evidence.
 
 YOUR JOB:
 
@@ -616,15 +644,32 @@ Respond in this exact JSON format:
     "contradictions": [
         {{
             "what_conflicts": "description of the contradiction",
-            "side_a": {{"observation": "...", "source": "doc_id"}},
-            "side_b": {{"observation": "...", "source": "doc_id"}},
+            "side_a": {{
+                "observation": "THE SPECIFIC DATA from worker — actual numbers, names, dates. Not a summary.",
+                "specific_data_points": ["entity X has value Y", "entity Z has value W"],
+                "source": "doc_id or URL of the original source",
+                "source_observation_node": "node_id of the worker that produced this"
+            }},
+            "side_b": {{
+                "observation": "THE SPECIFIC DATA from worker — actual numbers, names, dates. Not a summary.",
+                "specific_data_points": ["entity A has value B", "entity C has value D"],
+                "source": "doc_id or URL of the original source",
+                "source_observation_node": "node_id of the worker that produced this"
+            }},
             "significance": "why this matters"
         }}
     ],
     "cross_cutting_patterns": [
         {{
             "pattern": "description",
-            "evidence_chain": ["step 1 from investigator X", "step 2 from investigator Y"],
+            "evidence_chain": [
+                {{
+                    "claim": "specific factual claim with data",
+                    "specific_data_points": ["entity X: value Y"],
+                    "source": "doc_id",
+                    "source_observation_node": "node_id"
+                }}
+            ],
             "confidence": 0.0,
             "inferred_links": ["any links that are inference, not data"]
         }}
@@ -690,63 +735,68 @@ FINDING TYPE: {finding_type}
 FINDING: {finding}
 EVIDENCE: {evidence_chain}
 
-FIRST, classify this finding:
+Most findings contain TWO kinds of claims mixed together. Your job is to \
+evaluate them SEPARATELY:
 
-FACTUAL OBSERVATION: "Package X has Y downloads and Z maintainers." \
-These are read directly from the data source. They cannot be "weakened" — \
-they are either correct or incorrect. If the citation exists and the data \
-matches, the observation is CONFIRMED.
+A. FACTUAL CLAIMS — observations about the data. Counts, entities, dates, \
+word-level differences, relationships between records. These are verifiable: \
+either the data says what the finding claims, or it doesn't.
 
-PATTERN CLAIM: "There is a concentration of maintainer control across these \
-packages." These aggregate multiple observations into a pattern. They can be \
-weakened if the sample size is insufficient or the pattern could be coincidental. \
-But if the evidence is specific, verifiable, and sufficient, they should be \
-CONFIRMED or at most NEEDS_VERIFICATION.
+B. INTERPRETIVE CLAIMS — what the facts imply. Causal explanations, risk \
+assessments, motivations, predictions. These often can't be fully verified \
+from the data alone.
 
-INFERENTIAL CLAIM: "This concentration creates a security risk" or "These \
-things are coordinated." These draw conclusions beyond the data. Scrutinize \
-these heavily. Weaken them if the inference is speculative.
+EVALUATE FACTUAL CLAIMS:
+1. Does each factual claim cite a specific, verifiable source?
+2. Are the data points real and checkable?
+3. Is the sample size sufficient for the factual claim being made?
+4. Verdict: CONFIRMED (data supports), REFUTED (data contradicts), or \
+MISSING_EVIDENCE (can't verify from available data).
 
-Then evaluate:
+EVALUATE INTERPRETIVE CLAIMS:
+1. How many inferential leaps from the facts to the interpretation?
+2. Are there alternative interpretations the facts would also support?
+3. Confidence: WELL_SUPPORTED (facts strongly imply this, few alternatives), \
+PLAUSIBLE (consistent with facts but other interpretations fit), or \
+SPECULATIVE (large leap from facts to interpretation).
 
-1. EVIDENCE QUALITY: Does each claim cite a specific, verifiable source? \
-Are the data points real and checkable?
+DERIVE OVERALL VERDICT:
+- CONFIRMED: factual claims CONFIRMED AND interpretive claims WELL_SUPPORTED
+- CONFIRMED_WITH_CAVEATS: factual claims CONFIRMED but interpretive claims \
+only PLAUSIBLE or SPECULATIVE. The observations are real; the interpretation \
+is uncertain. This is NOT a weak finding — it means the data is solid and \
+the interpretation is reasonable but not the only possibility.
+- WEAKENED: factual claims have MISSING_EVIDENCE in part, but partial support exists
+- REFUTED: factual claims REFUTED or evidence directly contradicts the finding
 
-2. LOGICAL CHAIN: How many inferential leaps from data to conclusion? \
-Factual observations = 0 leaps. Pattern claims = 1 leap. Causal/risk claims = 2+ leaps.
-
-3. SAMPLE ADEQUACY: Is the sample size sufficient for the specific claim? \
-Note: "more data would help" applies to everything and is NOT grounds for weakening. \
-Only weaken when the evidence is genuinely insufficient for the claim being made.
-
-4. VERIFICATION: What single lookup would confirm or deny this?
+IMPORTANT: A finding where the factual observations are verified but the \
+interpretation is uncertain is CONFIRMED_WITH_CAVEATS, not NEEDS_VERIFICATION. \
+Reserve NEEDS_VERIFICATION only for findings where the factual claims themselves \
+cannot be assessed.
 
 METHODOLOGY ARTIFACTS TO REJECT:
 If a "contradiction" is between two measurements of the same thing taken at \
 different times or from different API endpoints, this is a measurement artifact, \
-not a discovery. Download counts fluctuate. API responses vary by endpoint. \
-Metadata may be cached differently. A real contradiction is between two DIFFERENT \
-SOURCES saying DIFFERENT THINGS about the SAME TOPIC — not the same source \
-returning slightly different numbers on two queries. Mark these as REFUTED.
-
-THRESHOLDS:
-- CONFIRMED: Every claim cites specific verifiable sources, pattern is supported \
-by sufficient data points, no logical leaps required.
-- NEEDS_VERIFICATION: Claims are plausible and well-cited but one key data point \
-could change the conclusion.
-- WEAKENED: Claims go beyond what the evidence shows, sample sizes are clearly \
-insufficient for the scope of the claim, or causal claims made from correlational data.
-- REFUTED: Evidence directly contradicts the claim.
+not a discovery. Mark these as REFUTED.
 
 Return JSON:
 {{
-    "verdict": "confirmed | weakened | refuted | needs_verification",
-    "finding_type": "factual | pattern | inferential",
-    "reasoning": "why you reached this verdict",
+    "factual_assessment": {{
+        "verdict": "CONFIRMED | REFUTED | MISSING_EVIDENCE",
+        "verifiable_claims": ["list each factual claim found in the finding"],
+        "reasoning": "why you assessed the facts this way"
+    }},
+    "interpretive_assessment": {{
+        "confidence": "WELL_SUPPORTED | PLAUSIBLE | SPECULATIVE",
+        "interpretive_claims": ["list each interpretive claim found"],
+        "reasoning": "why this confidence level"
+    }},
+    "verdict": "confirmed | confirmed_with_caveats | weakened | refuted | needs_verification",
+    "reasoning": "overall assessment combining factual and interpretive",
     "adjusted_confidence": 0.0,
     "adjusted_tier": 3,
-    "verification_action": "specific search or lookup that would resolve this",
-    "revised_finding": "reworded finding if the original overstated its case, or null if confirmed as-is"
+    "verification_action": "specific lookup that would resolve remaining uncertainty",
+    "revised_finding": "reworded finding separating established facts from uncertain interpretation, or null if confirmed as-is"
 }}
 
 Respond ONLY with valid JSON, no other text.
@@ -755,12 +805,14 @@ Respond ONLY with valid JSON, no other text.
 
 SIGNIFICANCE_PROMPT = """\
 You are an editor deciding whether a research finding deserves prominent placement. \
-Your audience is SOFTWARE DEVELOPERS and ENGINEERING LEADERS — people who build \
-and maintain production systems.
+Your audience is practitioners in this domain — people who work with this data daily.
 
 FINDING: {finding}
 EVIDENCE: {evidence}
 VALIDATION STATUS: {validation_status}
+
+COMMON KNOWLEDGE BRIEFING (what a practitioner already knows):
+{briefing_context}
 
 Assess this finding on these dimensions:
 
@@ -770,17 +822,21 @@ specific packages, maintainers, and download numbers that were read from the \
 data source, it IS genuine. Do not mark genuine=false simply because "more \
 investigation is needed."
 
-2. IS IT NOVEL? (1-5) — relative to YOUR AUDIENCE (developers, not the general public)
-   1 = Common knowledge among developers ("npm has many packages")
-   2 = Known vaguely ("some packages have few maintainers")
+2. IS IT COMMONLY KNOWN? Check the briefing above. If this finding merely restates, \
+illustrates, or is a direct consequence of a briefing claim, it is COMMONLY KNOWN. \
+Mark commonly_known=true and set novelty to 1-2.
+
+3. IS IT NOVEL? (1-5) — relative to the briefing AND your audience
+   1 = Directly covered by the briefing (commonly known)
+   2 = Close variant of a briefing claim (known vaguely)
    3 = Known vaguely but NOW QUANTIFIED with specific names and numbers
-   4 = Specific, verifiable, and surprising — a developer would stop to check this
+   4 = Specific, verifiable, and surprising — a practitioner would stop to check this
    5 = Nobody has reported this publicly before
 
-3. IS IT ACTIONABLE? (1-5) — can a developer or team DO something with this?
+4. IS IT ACTIONABLE? (1-5) — can a practitioner DO something with this?
    1 = No realistic action ("ecosystems are complex")
    3 = A specific investigation or audit could be triggered
-   4 = A developer could check their own dependencies against this TODAY
+   4 = A practitioner could check their own systems against this TODAY
    5 = Immediate specific action someone should take RIGHT NOW
 
 CALIBRATION — what scores 4+ for this audience:
@@ -798,9 +854,9 @@ What scores 2 or below:
 A finding with SPECIFIC NAMES, SPECIFIC NUMBERS, and VERIFIABLE CLAIMS should \
 almost always score 3+ on novelty unless it's truly common knowledge.
 
-4. WHO CARES? Name specific roles or teams.
+5. WHO CARES? Name specific roles or teams.
 
-5. WHAT DOES THIS UNLOCK? What happens next if someone acts on this?
+6. WHAT DOES THIS UNLOCK? What happens next if someone acts on this?
 
 COMPOSITE SCORE: Average of novelty + actionability (genuine must be yes, else 0).
 
@@ -812,6 +868,8 @@ THRESHOLD:
 Return JSON:
 {{
     "genuine": true,
+    "commonly_known": false,
+    "commonly_known_reasoning": "which briefing claim this matches, if any",
     "novelty": 3,
     "novelty_reasoning": "...",
     "actionability": 3,

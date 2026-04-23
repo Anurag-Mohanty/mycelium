@@ -176,8 +176,9 @@ def _format_validations(validations: list[dict]) -> str:
 
     lines = []
     for v in validations:
-        verdict_icon = {"confirmed": "CONFIRMED", "weakened": "WEAKENED",
-                        "refuted": "REFUTED", "needs_verification": "UNVERIFIED"
+        verdict_icon = {"confirmed": "CONFIRMED", "confirmed_with_caveats": "CONFIRMED*",
+                        "weakened": "WEAKENED", "refuted": "REFUTED",
+                        "needs_verification": "UNVERIFIED"
                         }.get(v.get("verdict", ""), "UNKNOWN")
         finding = v.get("original_finding", {})
         desc = (finding.get("what_conflicts", "") or finding.get("pattern", ""))[:100]

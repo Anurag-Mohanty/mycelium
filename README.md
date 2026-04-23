@@ -6,11 +6,11 @@ Release an autonomous explorer into any information space with a budget. It deci
 
 ## What It Found
 
-**SEC EDGAR** (26,495 filings from 6,966 companies, $5 budget): Extreme Networks eliminated 100% of risk factor disclosures between 2022 and 2023 (13,028 words → 0). Flagstar Bank's 2023 filing uses NYCB accession numbers and URL patterns (`nycb-20221231.htm`), revealing a corporate acquisition mid-filing-cycle. Computer Communications Equipment companies (SIC 3576) showed coordinated 77% reductions in risk disclosures. Found by cross-referencing 10-K filings across years, accession numbers, and SIC codes.
+**SEC EDGAR** (26,495 filings from 6,966 companies, $10 budget, 86% validation rate): Crisis-driven disclosure volatility cycles — companies show 10x+ word count swings in risk factors across consecutive years tied to specific events (litigation, acquisitions, regulatory changes). Systematic data extraction failures creating artificial zero-word disclosures concentrated in specific filing years. Abbott Labs 2022 disclosure anomalously low for pharmaceutical industry standards. Found by cross-referencing 10-K filings across years, accession numbers, and SIC codes with specific data citations verified by skeptical validator.
 
-**npm Registry** (100,726 packages, $10 budget): Jon Schlinkert controls 1+ billion monthly downloads across 3 utility packages — a single individual as critical infrastructure. React core packages show synchronized version patterns with identical git hashes and timestamps across packages, proving automated CI/CD publishing rather than API instability. @flmngr packages exhibit artificial download inflation patterns across coordinated namespace. Found by analyzing metadata, maintainer concentration, and version patterns across 100K enriched packages.
+**npm Registry** (100,726 packages, $10 budget, 100% validation rate): License field concentration anomaly — statistical survey flags 85.5% blank concentration, but manual examination reveals MIT dominance, exposing a data pipeline parsing failure. Packages like @anthropic-ai/claude-agent-sdk (16.8M downloads) and @ai-sdk/openai (22.1M downloads) show 0 maintainers, indicating corporate automation patterns distinct from individual-maintainer packages. Extreme version inflation in enterprise/AI packages (thousands of versions via CI/CD). Found by analyzing metadata across 100K enriched packages with specific data points carried through synthesis to validation.
 
-These findings require reading primary data and comparing across entities and time. No web search produces them.
+These findings require reading primary data, comparing across entities and time, and survive skeptical validation that separates factual claims from interpretive uncertainty. No web search produces them.
 
 ## Quick Start
 
@@ -43,6 +43,10 @@ CATALOG (free)      Statistical survey of all records. 10 analytical techniques.
      |
 GENESIS ($0.05)     LLM surveys corpus shape, generates attention lenses.
      |
+BRIEFING ($0.04)    Generates common knowledge baseline — 10-15 claims a domain
+                    practitioner would already know. Workers compare findings
+                    against this to distinguish novel from confirmatory.
+     |
 PLANNER ($0.05)     Budget-aware exploration strategy. Reasons about exploration
                     envelope (40-75% of budget) and max decomposition depth from
                     leaf viability math.
@@ -57,7 +61,9 @@ SYNTHESIZE          Cross-references findings across branches.
      |
 DEEP-DIVE           Targeted follow-up on most interesting findings.
      |
-VALIDATE            Skeptical review of Tier 3-5 findings.
+VALIDATE            Two-layer skeptical review: factual claims verified separately
+                    from interpretive claims. CONFIRMED, CONFIRMED_WITH_CAVEATS,
+                    WEAKENED, or REFUTED.
      |
 IMPACT              Real-world consequence assessment.
      |
@@ -73,7 +79,7 @@ Every node operates like an employee in an organization:
 - **Receives PURPOSE** — not just scope and data, but why it's being asked and how it fits the broader investigation
 - **Receives BUDGET CONTEXT** — own envelope, parent's remaining pool, phase remaining, depth position, minimum child envelope
 - **Produces EVIDENCE PACKETS** — structured data (raw_evidence, statistical_grounding, local_hypothesis, surprising_because), not prose summaries
-- **Classifies SIGNAL STRENGTH** — each observation marked as `data_originated` (required reading the data) or `confirmatory` (an informed observer would have expected this)
+- **Classifies SIGNAL STRENGTH** — each observation marked as `data_originated_novel` (required the data AND not in the briefing), `data_originated_confirmatory` (required the data BUT restates something in the briefing), or `confirmatory` (expected without reading the data)
 - **Self-assesses** — purpose addressed, evidence quality, worthwhile follow-up threads, capability gaps, adjacent findings outside scope
 - **Parent reviews (Turn 2)** — five-option budget deployment: fund continuation on flagged thread, fund adjacent finding, spawn more, pivot, or resolve
 - **Metrics tracked** — budget efficiency, purpose alignment, evidence quality, envelope utilization per node
@@ -138,10 +144,11 @@ mycelium/
   worker.py            # WorkerNode — persistent multi-turn agent with envelope caps
   node.py              # Single-call reasoning primitive (legacy)
   genesis.py           # Corpus survey + lens generation
+  briefer.py           # Common knowledge briefing for novelty calibration
   planner.py           # Budget-aware strategy + exploration envelope + depth computation
   survey.py            # AnalyticalSurvey (10 techniques, sklearn/pandas)
   synthesizer.py       # Cross-reference sibling observations
-  validator.py         # Skeptical review
+  validator.py         # Two-layer skeptical review (factual + interpretive)
   significance.py      # Novelty + actionability scoring
   impact.py            # Real-world impact assessment
   reporter.py          # Five-tier markdown report
@@ -201,8 +208,9 @@ Per-node diagnostics at `output/{run_id}/diagnostics/` show exactly what each no
 - Model: Claude Sonnet ($3/M input, $15/M output)
 - Extended thinking: 5000 token budget per node
 - Typical $5 run (v2): ~20 nodes, ~50-60 observations, depth 2, 70-75% utilization
-- Typical $10 run (v2): ~50 nodes, ~70-100 observations, depth 2-3, 75-85% utilization
-- Run metrics track cost per observation, cost per validated finding, envelope utilization, spawn rejections
+- Typical $10 run (v2): ~20-30 nodes, ~75-125 observations, depth 2-3, 70-80% utilization, 67-100% validation rate
+- Briefing generation: ~$0.04 per run
+- Run metrics track cost per observation, cost per validated finding, envelope utilization, spawn rejections, synthesis citation quality, signal strength distribution
 
 ## Core Principle
 

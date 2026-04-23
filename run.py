@@ -97,10 +97,11 @@ return {{"is_exploration": false, "message": "Mycelium explores data sources, no
 
 STEP 2: Does it match a built-in connector?
 - "npm": npm package registry. Match ONLY for: npm, node packages, JavaScript/TypeScript packages
+- "sec" or "sec_edgar": SEC EDGAR financial filings. Match for: SEC, EDGAR, 10-K filings, annual reports, SEC filings, financial disclosures
 - "federal_register": US Federal Register. Match ONLY for: federal register, federal regulations, CFR
-If yes, return {{"is_exploration": true, "connector": "npm_or_federal_register", "name": "...", "description": "..."}}.
+If yes, return {{"is_exploration": true, "connector": "the_connector_name", "name": "...", "description": "..."}}.
 
-STRICT: "FDA" is NOT the Federal Register. "SEC" is NOT the Federal Register. "GitHub" is NOT npm.
+STRICT: "FDA" is NOT the Federal Register. "GitHub" is NOT npm. "SEC" is NOT the Federal Register.
 
 STEP 3: If no built-in connector, but a PUBLIC API exists for this data, return its configuration.
 Think about what public REST API serves this data. Many government agencies, open data platforms,
@@ -134,12 +135,13 @@ Return:
 
 Examples of APIs you should know:
 - FDA: api.fda.gov, endpoints like /drug/event.json, /food/recall.json
-- SEC EDGAR: efts.sec.gov/LATEST/search-index, full-text search of filings
 - EPA AQS: aqs.epa.gov/data/api
 - GitHub: api.github.com, /search/repositories, /repos/owner/name/issues
 - USGS Earthquakes: earthquake.usgs.gov/fdsnws/event/1/query
 - Open Library: openlibrary.org/search.json
 - PubMed: eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi
+- PyPI: No JSON search API exists. Individual package metadata at pypi.org/pypi/PACKAGE_NAME/json but no bulk search. If user asks for PyPI, return api_config with base_url "https://pypi.org", search_endpoint "/search", search_param "q", records_path "results" and search_terms for common packages. Note: this may return HTML, not JSON.
+- USPTO: PatentsView API. base_url "https://api.patentsview.org", search_endpoint "/patents/query", method POST with JSON body. For GET-based access use: base_url "https://api.patentsview.org/patents/query", search_param "q", records_path "patents", field_mapping: id=patent_number, title=patent_title, date=patent_date, description=patent_abstract. search_terms: ["machine learning", "artificial intelligence", "semiconductor", "battery technology", "gene therapy"]. Rate limit 1000ms.
 
 If you genuinely don't know a public API for this data source, return:
 {{

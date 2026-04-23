@@ -25,6 +25,7 @@ from .schemas import (
     BudgetPool, ValidationResult, ImpactResult, Observation, Source,
 )
 from .genesis import run_genesis
+from .briefer import generate_briefing
 from .planner import create_plan
 from .survey import ProgrammaticSurvey
 from .node import run_node
@@ -166,8 +167,46 @@ class Orchestrator:
             print()  # newline after \r progress
 
             if bulk_records:
-                survey_engine = ProgrammaticSurvey()
-                catalog_stats = survey_engine.analyze(bulk_records)
+                # Survey caching: hash the record count + first/last record IDs
+                # to detect when catalog data changes.
+                import hashlib
+                cache_key_parts = [
+                    str(len(bulk_records)),
+                    str(bulk_records[0].get("id", bulk_records[0].get("title", "")))[:50],
+                    str(bulk_records[-1].get("id", bulk_records[-1].get("title", "")))[:50],
+                    self.data_source.__class__.__name__,
+                ]
+                cache_hash = hashlib.md5("|".join(cache_key_parts).encode()).hexdigest()[:12]
+                cache_path = Path("catalog") / f"survey_cache_{cache_hash}.json"
+
+                if cache_path.exists():
+                    import json as _json
+                    with open(cache_path) as _f:
+                        catalog_stats = _json.load(_f)
+                    print(f"  [CATALOG] Survey loaded from cache ({cache_path.name})")
+                else:
+                    survey_engine = ProgrammaticSurvey()
+                    catalog_stats = survey_engine.analyze(bulk_records)
+                    # Save cache — convert numpy types to native Python for JSON
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    import json as _json
+                    import numpy as _np
+
+                    def _numpy_safe(obj):
+                        if isinstance(obj, (_np.integer,)):
+                            return int(obj)
+                        if isinstance(obj, (_np.floating,)):
+                            return float(obj) if not _np.isnan(obj) else None
+                        if isinstance(obj, _np.ndarray):
+                            return obj.tolist()
+                        if isinstance(obj, float) and (obj != obj):  # NaN check
+                            return None
+                        raise TypeError(f"Not JSON serializable: {type(obj)}")
+
+                    with open(cache_path, "w") as _f:
+                        _json.dump(catalog_stats, _f, default=_numpy_safe)
+                    print(f"  [CATALOG] Survey cached to {cache_path.name}")
+
                 n_records = catalog_stats["record_count"]
                 n_clusters = len(catalog_stats.get("anomaly_clusters", []))
                 n_outliers = len(catalog_stats.get("outliers", []))
@@ -270,6 +309,23 @@ class Orchestrator:
         if not lenses:
             print("  [GENESIS] ERROR: No lenses. Aborting.")
             return self._build_exploration_data()
+
+        # --- Briefing stage (v2 only) ---
+        from . import prompts as _prompts
+        if _prompts.get_version() == "v2" and bulk_records:
+            print(f"\n  [BRIEFING] Generating common knowledge baseline...")
+            self._briefing = await generate_briefing(
+                genesis_result=self.genesis_result,
+                catalog_records=bulk_records,
+                survey_results=catalog_stats,
+                source_name=self.data_source.__class__.__name__,
+            )
+            self.budget.record("overhead", self._briefing.cost)
+            self._update_tokens(self._briefing.token_usage)
+            print(f"  [BRIEFING] Generated ({len(self._briefing.common_knowledge)} chars, "
+                  f"${self._briefing.cost:.3f})")
+        else:
+            self._briefing = None
 
         # --- Phase 1: Planner ---
         print(f"\n  [PLANNER] Creating exploration strategy...")
@@ -415,6 +471,7 @@ class Orchestrator:
                 segment_id=seg["name"],
                 survey_anomalies=seg_anomalies,
             )
+            briefing_text = self._briefing.common_knowledge if self._briefing else ""
             worker = WorkerNode(
                 directive=directive,
                 data_source=self.data_source,
@@ -427,6 +484,7 @@ class Orchestrator:
                 depth=0,
                 max_depth=self._max_depth,
                 leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
+                briefing=briefing_text,
             )
             segment_workers.append(worker)
 
@@ -781,6 +839,7 @@ class Orchestrator:
             )
 
             # Use WorkerNode so thinking events stream to the visualizer
+            briefing_text = self._briefing.common_knowledge if self._briefing else ""
             worker = WorkerNode(
                 directive=directive,
                 data_source=self.data_source,
@@ -793,6 +852,7 @@ class Orchestrator:
                 depth=0,
                 max_depth=self._max_depth,
                 leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
+                briefing=briefing_text,
             )
             worker_result = await worker.run()
 
@@ -839,7 +899,7 @@ class Orchestrator:
             self.budget.record("validation", result.cost)
             self._update_tokens(result.token_usage)
             self.stats.findings_validated += 1
-            if result.verdict == "confirmed":
+            if result.verdict in ("confirmed", "confirmed_with_caveats"):
                 self.stats.findings_confirmed += 1
             print(f"    → {result.verdict} (confidence: {result.adjusted_confidence:.2f})")
             events.emit("validation_result", {
@@ -852,7 +912,7 @@ class Orchestrator:
 
     async def _run_significance_gate(self):
         """Filter validated findings by novelty and actionability before impact analysis."""
-        confirmed = [v for v in self.all_validations if v.verdict in ("confirmed", "weakened", "needs_verification")]
+        confirmed = [v for v in self.all_validations if v.verdict in ("confirmed", "confirmed_with_caveats", "weakened", "needs_verification")]
         if not confirmed:
             return
 
@@ -871,10 +931,12 @@ class Orchestrator:
                        or v.original_finding.get("pattern", ""))[:60]
             print(f"  [SIGNIFICANCE {i}/{len(confirmed)}] {desc}...")
 
+            briefing_for_sig = self._briefing.common_knowledge if self._briefing else ""
             result = await assess_significance(
                 v.finding_id, v.original_finding,
                 {"verdict": v.verdict, "revised_finding": v.revised_finding,
-                 "adjusted_confidence": v.adjusted_confidence})
+                 "adjusted_confidence": v.adjusted_confidence},
+                briefing_text=briefing_for_sig)
             self.all_significance_scores.append(result)
             self.budget.record("validation", result.get("cost", 0))
             self._update_tokens(result.get("token_usage", {}))
@@ -1658,6 +1720,24 @@ Respond ONLY with a JSON array."""}],
         self_eval_gaps = sum(1 for w in all_workers
                             if not w.metrics.get("purpose_addressed", True))
 
+        # Count signal strength categories across all observations
+        signal_counts = {"data_originated_novel": 0, "data_originated_confirmatory": 0,
+                         "confirmatory": 0, "data_originated": 0, "unset": 0}
+        for w in all_workers:
+            for obs in w.observations:
+                sig = obs.get("signal_strength", "")
+                if sig in signal_counts:
+                    signal_counts[sig] += 1
+                elif sig:
+                    signal_counts[sig] = signal_counts.get(sig, 0) + 1
+                else:
+                    signal_counts["unset"] += 1
+
+        # Count commonly_known findings from significance scoring
+        commonly_known_count = sum(
+            1 for s in getattr(self, 'all_significance_scores', [])
+            if s.get("commonly_known", False))
+
         # Count spawn rejections
         depth_cap_rejections = 0
         envelope_floor_rejections = 0
@@ -1669,9 +1749,36 @@ Respond ONLY with a JSON array."""}],
                     envelope_floor_rejections += 1
 
         # Count validated findings
+        # Count synthesis quality — findings with specific data points
+        synthesis_with_specifics = 0
+        total_data_points = 0
+        for s in self.all_syntheses:
+            for c in s.contradictions:
+                has_specifics = bool(
+                    c.get("side_a", {}).get("specific_data_points") or
+                    c.get("side_b", {}).get("specific_data_points"))
+                if has_specifics:
+                    synthesis_with_specifics += 1
+                    total_data_points += len(c.get("side_a", {}).get("specific_data_points", []))
+                    total_data_points += len(c.get("side_b", {}).get("specific_data_points", []))
+            for p in s.cross_cutting:
+                chain = p.get("evidence_chain", [])
+                has_specifics = any(
+                    isinstance(e, dict) and e.get("specific_data_points")
+                    for e in chain) if chain else False
+                if has_specifics:
+                    synthesis_with_specifics += 1
+                    for e in chain:
+                        if isinstance(e, dict):
+                            total_data_points += len(e.get("specific_data_points", []))
+        total_synthesis_findings = sum(
+            len(s.contradictions) + len(s.cross_cutting) for s in self.all_syntheses)
+
         confirmed = sum(1 for v in self.all_validations if v.verdict == "confirmed")
+        confirmed_with_caveats = sum(1 for v in self.all_validations if v.verdict == "confirmed_with_caveats")
         weakened = sum(1 for v in self.all_validations if v.verdict == "weakened")
         refuted = sum(1 for v in self.all_validations if v.verdict == "refuted")
+        needs_verification = sum(1 for v in self.all_validations if v.verdict == "needs_verification")
         total_validated = len(self.all_validations)
 
         total_obs = self.stats.observations_collected
@@ -1700,9 +1807,11 @@ Respond ONLY with a JSON array."""}],
                 "total_observations": total_obs,
                 "findings_submitted": total_validated,
                 "findings_confirmed": confirmed,
+                "findings_confirmed_with_caveats": confirmed_with_caveats,
                 "findings_weakened": weakened,
                 "findings_refuted": refuted,
-                "validation_rate": round(confirmed / max(1, total_validated), 3),
+                "findings_needs_verification": needs_verification,
+                "validation_rate": round((confirmed + confirmed_with_caveats) / max(1, total_validated), 3),
                 "observations_per_node": round(total_obs / max(1, total_nodes), 2),
                 "observations_per_dollar": round(total_obs / max(0.01, total_cost), 1),
                 "zero_obs_nodes": zero_obs_nodes,
@@ -1734,6 +1843,18 @@ Respond ONLY with a JSON array."""}],
                 "records_analyzed_by_survey": enriched_count,
             },
             "planner_decisions": getattr(self, '_planner_envelope', {}),
+            "briefing": {
+                "cost": self._briefing.cost if self._briefing else 0,
+                "length": len(self._briefing.common_knowledge) if self._briefing else 0,
+                "signal_strength_counts": signal_counts,
+                "commonly_known_findings": commonly_known_count,
+            },
+            "synthesis_quality": {
+                "total_findings": total_synthesis_findings,
+                "findings_with_specifics": synthesis_with_specifics,
+                "total_data_points_cited": total_data_points,
+                "avg_data_points_per_finding": round(total_data_points / max(1, total_synthesis_findings), 1),
+            },
         }
 
         # Write metrics.json
@@ -1810,6 +1931,8 @@ def _validation_to_dict(v: ValidationResult) -> dict:
     return {
         "finding_id": v.finding_id, "original_finding": v.original_finding,
         "verdict": v.verdict, "reasoning": v.reasoning,
+        "factual_assessment": v.factual_assessment,
+        "interpretive_assessment": v.interpretive_assessment,
         "adjusted_confidence": v.adjusted_confidence, "adjusted_tier": v.adjusted_tier,
         "verification_action": v.verification_action, "revised_finding": v.revised_finding,
         "cost": v.cost,

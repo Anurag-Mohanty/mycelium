@@ -30,7 +30,8 @@ class WorkerNode:
                  semaphore: asyncio.Semaphore = None, budget_pool=None,
                  parent_pool_available: float = 0.0,
                  depth: int = 0, max_depth: int = 3,
-                 leaf_viable_envelope: float = 0.12):
+                 leaf_viable_envelope: float = 0.12,
+                 briefing: str = ""):
         self.directive = directive
         self.data_source = data_source
         self.budget = budget          # my allocation
@@ -44,6 +45,7 @@ class WorkerNode:
         self.depth = depth
         self.max_depth = max_depth
         self.leaf_viable_envelope = leaf_viable_envelope
+        self._briefing = briefing
 
         self.node_id = directive.node_id
         self.pos = directive.tree_position
@@ -233,6 +235,7 @@ class WorkerNode:
                 depth=self.depth + 1,
                 max_depth=self.max_depth,
                 leaf_viable_envelope=self.leaf_viable_envelope,
+                briefing=self._briefing,
             )
             self.child_workers.append(child)
 
@@ -465,11 +468,24 @@ class WorkerNode:
                 f"reject spawns below this minimum."
             )
 
+        # Build briefing context block
+        if self._briefing:
+            briefing_context = (
+                "## Common Knowledge About This Corpus\n\n"
+                "The following patterns are widely known about this corpus. "
+                "Findings that merely restate these are confirmatory, not novel. "
+                "Look for patterns these claims would NOT already cover:\n\n"
+                + self._briefing
+            )
+        else:
+            briefing_context = ""
+
         import datetime
         prompt = NODE_REASONING_PROMPT.format(
             current_date=datetime.date.today().isoformat(),
             purpose=purpose,
             parent_context=parent_ctx,
+            briefing_context=briefing_context,
             scope_description=self.directive.scope.description,
             lenses=lenses_str,
             filter_schema=filter_schema_str,
@@ -665,6 +681,7 @@ class WorkerNode:
                 depth=self.depth + 1,
                 max_depth=self.max_depth,
                 leaf_viable_envelope=self.leaf_viable_envelope,
+                briefing=self._briefing,
             )
             self.child_workers.append(child)
 
@@ -756,6 +773,7 @@ class WorkerNode:
                 "max_depth": self.max_depth,
             },
             "spawn_rejections": getattr(self, '_spawn_rejections', []),
+            "briefing_provided": bool(self._briefing),
             "decision": "decomposed" if self.child_workers else "resolved",
             "decision_reasoning": assess_reasoning[:300],
         }

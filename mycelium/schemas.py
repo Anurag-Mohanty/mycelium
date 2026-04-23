@@ -1,6 +1,7 @@
 """Data structures for the Mycelium exploration tree.
 
 Core structures:
+- Briefing: common knowledge baseline for novelty calibration
 - Directive: what a node is told to explore
 - Observation: what a node found (with citation)
 - NodeResult: complete output from a single reasoning node
@@ -14,6 +15,29 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Optional
 import uuid
+
+
+# --- Briefing (common knowledge baseline) ---
+
+@dataclass
+class Briefing:
+    """Common knowledge baseline for novelty calibration.
+
+    Only common_knowledge is populated in Phase C. Other fields are
+    schema reservations for future EQUIP layers (see MYCELIUM_VISION.md).
+    """
+    common_knowledge: str = ""
+    relevant_data_sources: list[str] = field(default_factory=list)
+    # Future fields — not populated yet
+    task_statement: Optional[str] = None
+    task_interpretation: Optional[str] = None
+    available_tools: list[str] = field(default_factory=list)
+    proposed_organization: Optional[dict] = None
+    role_tool_allocation: Optional[dict] = None
+    success_criteria: Optional[str] = None
+    # Generation metadata
+    cost: float = 0.0
+    token_usage: dict = field(default_factory=dict)
 
 
 # --- Core exploration structures ---
@@ -125,13 +149,15 @@ class ValidationResult:
     """Skeptical review of a Tier 3-5 finding."""
     finding_id: str
     original_finding: dict
-    verdict: str          # confirmed, weakened, refuted, needs_verification
+    verdict: str          # confirmed, confirmed_with_caveats, weakened, refuted, needs_verification
     reasoning: str
     adjusted_confidence: float
     adjusted_tier: int
     verification_action: str
     revised_finding: Optional[str]
     raw_reasoning: str
+    factual_assessment: dict = field(default_factory=dict)
+    interpretive_assessment: dict = field(default_factory=dict)
     token_usage: dict = field(default_factory=dict)
     cost: float = 0.0
 

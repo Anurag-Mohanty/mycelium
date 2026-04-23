@@ -11,13 +11,15 @@ from .prompts import SIGNIFICANCE_PROMPT
 
 
 async def assess_significance(finding_id: str, finding: dict,
-                               validation: dict) -> dict:
+                               validation: dict,
+                               briefing_text: str = "") -> dict:
     """Score a validated finding on novelty and actionability.
 
     Args:
         finding_id: Unique ID
         finding: The original finding dict
         validation: The validation result dict
+        briefing_text: Common knowledge briefing (if available)
 
     Returns:
         dict with scores, tier assignment, headline, recommendation
@@ -31,6 +33,7 @@ async def assess_significance(finding_id: str, finding: dict,
         finding=finding_desc,
         evidence=evidence,
         validation_status=validation.get("verdict", "unknown"),
+        briefing_context=briefing_text,
     )
 
     client = anthropic.Anthropic()
