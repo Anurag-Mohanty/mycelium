@@ -87,6 +87,8 @@ async def validate_finding(finding_id: str, finding_type: str, finding: dict) ->
         raw_reasoning=raw_text,
         factual_assessment=result.get("factual_assessment", {}),
         interpretive_assessment=result.get("interpretive_assessment", {}),
+        is_pipeline_issue=result.get("is_pipeline_issue", False),
+        pipeline_issue_reasoning=result.get("pipeline_issue_reasoning", ""),
         token_usage=usage,
         cost=cost,
     )

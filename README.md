@@ -41,19 +41,26 @@ CATALOG (free)      Statistical survey of all records. 10 analytical techniques.
                     Identifies multi-flagged anomalies before spending any AI budget.
                     Produces INVESTIGATION TARGETS with statistical evidence.
      |
-GENESIS ($0.05)     LLM surveys corpus shape, generates attention lenses.
+GENESIS ($0.15)     CEO writes ORGANIZATIONAL CHARTER — directive voice setting
+                    purpose, quality standards, and stakes. Incorporates briefing
+                    as "what's already known" so workers don't rediscover it.
      |
-BRIEFING ($0.04)    Generates common knowledge baseline — 10-15 claims a domain
-                    practitioner would already know. Workers compare findings
-                    against this to distinguish novel from confirmatory.
+PLANNER ($0.03)     Program office translates charter into operational reality:
+                    RULES OF ENGAGEMENT (budget policy, evidence standards, novelty
+                    requirements) and INITIAL SCOPES with scope levels (manager /
+                    worker / ambiguous). Budget allocations are ceilings — unused
+                    budget flows back to exploration.
      |
-PLANNER ($0.05)     Budget-aware exploration strategy. Reasons about exploration
-                    envelope (40-75% of budget) and max decomposition depth from
-                    leaf viability math.
+WORKSPACE           Org-level workspace created on filesystem: charter.md, rules.md,
+                    scopes.json. Every worker reads from this workspace — no
+                    paraphrase drift. Charter compliance checked before output.
      |
 EXPLORE ($$$)       WorkerNode agents — persistent, multi-turn, self-decomposing.
-  |   |   |         Each receives PURPOSE + TARGETS + DATA + BUDGET CONTEXT.
+  |   |   |         Each receives PURPOSE + TARGETS + DATA + WORKSPACE REFERENCE.
+  |   |   |         Reads charter/rules from workspace for quality judgments.
   |   |   |         Produces EVIDENCE PACKETS with signal strength classification.
+  |   |   |         Charter compliance check: suppress known patterns, reframe
+  |   |   |         related findings to novel angles.
   |   |   |         Self-assesses: follow-up threads, capability gaps, adjacent findings.
   |   |   |         Parent reviews and deploys remaining budget to continuations.
   |   |   |
@@ -62,35 +69,51 @@ SYNTHESIZE          Cross-references findings across branches.
 DEEP-DIVE           Targeted follow-up on most interesting findings.
      |
 VALIDATE            Two-layer skeptical review: factual claims verified separately
-                    from interpretive claims. CONFIRMED, CONFIRMED_WITH_CAVEATS,
-                    WEAKENED, or REFUTED.
+                    from interpretive claims. Pipeline issues flagged separately.
+                    CONFIRMED, CONFIRMED_WITH_CAVEATS, WEAKENED, or REFUTED.
      |
 IMPACT              Real-world consequence assessment.
      |
 REPORT              Five-tier markdown report + run metrics + full transcript.
+                    Pipeline issues separated into dedicated section.
 ```
 
-Every node runs: **Survey, Orient, Hypothesize, Assess Coverage, Produce**. Nodes receive a purpose, self-evaluate their output, and parents review whether children delivered what was asked. The code is plumbing. The LLM makes all decisions.
+Every node runs: **Survey, Orient, Hypothesize, Assess Coverage, Charter Compliance Check, Produce**. Workers read the charter before reporting — observations matching the "already known" list are suppressed, related patterns reframed to novel angles. The code is plumbing. The LLM makes all decisions.
+
+## Phase F: Emergent Organization
+
+Phase F replaces the previous lens/segment approach with an organizational metaphor:
+
+- **Genesis = CEO** — reads corpus, survey, and briefing; writes an organizational charter in directive voice. Sets purpose, quality standards, stakes. Does NOT design the organization.
+- **Planner = Program Office** — translates charter into operational reality: rules of engagement + initial scopes with scope levels. Budget allocations are ceilings, not reservations.
+- **Workers = Organization** — each worker receives a scope and workspace reference. Reads charter/rules from the shared workspace for quality judgments. Manager-level scopes decompose; worker-level scopes investigate directly; ambiguous scopes decide at runtime.
+
+The charter is the single source of truth for quality. Workers actively check observations against the charter's "already known" list before reporting. Known patterns are suppressed. Related patterns are reframed to novel angles.
+
+See [PHASE_F_DESIGN.md](PHASE_F_DESIGN.md) for the full design.
 
 ## Node Accountability
 
 Every node operates like an employee in an organization:
 
 - **Receives PURPOSE** — not just scope and data, but why it's being asked and how it fits the broader investigation
+- **Receives WORKSPACE REFERENCE** — path to org-level workspace with charter, rules, scopes
 - **Receives BUDGET CONTEXT** — own envelope, parent's remaining pool, phase remaining, depth position, minimum child envelope
 - **Produces EVIDENCE PACKETS** — structured data (raw_evidence, statistical_grounding, local_hypothesis, surprising_because), not prose summaries
-- **Classifies SIGNAL STRENGTH** — each observation marked as `data_originated_novel` (required the data AND not in the briefing), `data_originated_confirmatory` (required the data BUT restates something in the briefing), or `confirmatory` (expected without reading the data)
+- **Checks CHARTER COMPLIANCE** — before output, each observation checked against charter's known-pattern list. Suppress, reframe, or pass.
+- **Classifies SIGNAL STRENGTH** — each observation marked as `data_originated_novel`, `data_originated_confirmatory`, or `confirmatory`
 - **Self-assesses** — purpose addressed, evidence quality, worthwhile follow-up threads, capability gaps, adjacent findings outside scope
 - **Parent reviews (Turn 2)** — five-option budget deployment: fund continuation on flagged thread, fund adjacent finding, spawn more, pivot, or resolve
 - **Metrics tracked** — budget efficiency, purpose alignment, evidence quality, envelope utilization per node
 
-## Budget Architecture (v2 prompts)
+## Budget Architecture
 
-- **Planner-determined exploration envelope** — 40-75% of total budget, reasoned from corpus complexity
-- **Planner-computed max depth** — derived from leaf viability math, not arbitrary limits
+- **Planner-determined allocations as ceilings** — downstream phases (synthesis, validation, etc.) get upper-bound estimates; unused budget flows back to exploration
+- **Effective exploration limit** — typically 85% of total budget with ceiling headroom
+- **Relaxed depth** — max depth 6 (safety circuit), budget is the real constraint
 - **Per-node envelope caps** — children can't silently overspend their allocation
 - **Envelope floor** — children below minimum viable cost ($0.12) are rejected at spawn
-- **Review phase** — separate 15% budget for Turn 2 reviews, independent of exploration surplus
+- **Review phase** — separate budget for Turn 2 reviews
 - **Continuation funding** — parents deploy unspent envelope to follow-up children via Option A
 
 ## Data Sources
@@ -143,9 +166,10 @@ mycelium/
   orchestrator.py      # Full pipeline coordinator + run metrics + envelope enforcement
   worker.py            # WorkerNode — persistent multi-turn agent with envelope caps
   node.py              # Single-call reasoning primitive (legacy)
-  genesis.py           # Corpus survey + lens generation
+  genesis.py           # Phase F: organizational charter generation (CEO directive voice)
   briefer.py           # Common knowledge briefing for novelty calibration
-  planner.py           # Budget-aware strategy + exploration envelope + depth computation
+  planner.py           # Phase F: operational plan from charter (rules + scopes + budget)
+  workspace.py         # Phase F: filesystem workspace (charter, rules, scopes)
   survey.py            # AnalyticalSurvey (10 techniques, sklearn/pandas)
   synthesizer.py       # Cross-reference sibling observations
   validator.py         # Two-layer skeptical review (factual + interpretive)

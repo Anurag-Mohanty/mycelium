@@ -442,6 +442,28 @@ structures) → decompose into those distinct areas.
 Never create a single child. If you can't identify at least 2 distinct threads, \
 resolve directly.
 
+--- CHARTER COMPLIANCE CHECK ---
+
+Before producing output, re-read the ORGANIZATIONAL CHARTER above (if present). \
+For EACH observation you are about to report, ask:
+
+1. Does the charter's "What Is Already Known" section already describe this? \
+   If yes: SUPPRESS the observation entirely. Do not include it. The charter \
+   exists precisely so you don't waste time reporting known patterns.
+
+2. Would the charter's leadership say "obvious" about this? If the charter \
+   gives examples of unimpressive findings and yours matches one, suppress it.
+
+3. Does the observation meet the charter's specificity standard? If the charter \
+   demands named entities and exact numbers, a vague pattern observation fails.
+
+If an observation is RELATED to a known pattern but reveals something the \
+charter doesn't cover, REFRAME it: instead of "lodash has 1 maintainer" \
+(known), report "lodash's 580M downloads flow through a dependency chain \
+where packages X, Y, Z create an unmapped chokepoint" (novel).
+
+Only observations that PASS this check should appear in your output.
+
 --- WHEN RESOLVING ---
 
 For each investigation target and anything else you notice, produce an EVIDENCE \
@@ -760,6 +782,24 @@ EVALUATE INTERPRETIVE CLAIMS:
 PLAUSIBLE (consistent with facts but other interpretations fit), or \
 SPECULATIVE (large leap from facts to interpretation).
 
+C. PIPELINE ISSUE CHECK — is this finding about the corpus, or about the \
+data collection/extraction process?
+
+Flag is_pipeline_issue=true when the corpus ITSELF contradicts the claimed value:
+- A field's measured value contradicts other measurements of the same field \
+for the same record (two measurements of the same thing disagree)
+- A field is empty/zero/missing but the record's OTHER fields indicate it \
+should have content (the corpus internally contradicts the zero)
+- A field shows sudden disappearance between time periods with no corresponding \
+change in other fields (discontinuity inconsistent with the record's trajectory)
+- The finding's own interpretive claim names the data pipeline, collection \
+methodology, extraction, or parsing as the likely cause
+
+Do NOT flag is_pipeline_issue when a field is zero/empty and other corpus fields \
+are consistent with that (e.g., an unused entity genuinely having zero activity). \
+Ask "does the corpus itself contradict this value?" — not "would I expect this \
+to be non-zero?"
+
 DERIVE OVERALL VERDICT:
 - CONFIRMED: factual claims CONFIRMED AND interpretive claims WELL_SUPPORTED
 - CONFIRMED_WITH_CAVEATS: factual claims CONFIRMED but interpretive claims \
@@ -795,6 +835,8 @@ Return JSON:
     "reasoning": "overall assessment combining factual and interpretive",
     "adjusted_confidence": 0.0,
     "adjusted_tier": 3,
+    "is_pipeline_issue": false,
+    "pipeline_issue_reasoning": "if flagged: which corpus-internal contradiction triggered this; if not flagged: empty string",
     "verification_action": "specific lookup that would resolve remaining uncertainty",
     "revised_finding": "reworded finding separating established facts from uncertain interpretation, or null if confirmed as-is"
 }}
@@ -1238,6 +1280,201 @@ Return JSON:
     ],
     "surplus_to_return": 0.00,
     "surplus_reason": "why returning this amount — must justify why no deployment option is valuable"
+}}
+
+Respond ONLY with valid JSON, no other text.
+"""
+
+
+# --- Phase F Prompts ---
+
+CHARTER_PROMPT = """\
+You are the CEO of a research organization. You are about to send your entire \
+team into an information space to find things nobody knows yet.
+
+You have received a structural survey of the corpus and a statistical analysis \
+of what patterns the data contains. You have also received a briefing on what \
+domain practitioners already know about this space.
+
+TODAY'S DATE: {current_date}
+(Timestamps from the current year are normal — packages are actively maintained. \
+Do NOT frame current-year dates as anomalous or impossible.)
+
+CORPUS METADATA (sample of records):
+{corpus_metadata}
+
+STATISTICAL SURVEY FINDINGS:
+{survey_findings}
+
+COMMON KNOWLEDGE BRIEFING:
+{briefing}
+
+TOTAL BUDGET: ${budget:.2f}
+
+YOUR TASK: Write the ORGANIZATIONAL CHARTER for this investigation.
+
+The charter is your directive to the entire organization. Every investigator \
+will read it. It sets purpose, standards, and stakes. Write it in your voice \
+as the leader — not as a report, not as a description of the data, but as a \
+directive that tells your team what you expect from them.
+
+The charter must cover:
+
+1. WHAT WE ARE INVESTIGATING AND WHY IT MATTERS. Frame the corpus and the \
+mission. Not "this dataset contains 100K packages" but "we have been given \
+access to the complete dependency graph of the modern software ecosystem — \
+every package, every maintainer, every version. Our job is to find what \
+nobody else has noticed."
+
+2. WHAT IS ALREADY KNOWN. Incorporate the briefing content. Tell your team \
+what's common knowledge so they don't waste time rediscovering it. Be specific \
+— name entities, cite numbers. "Everyone knows lodash is maintained by one \
+person. Don't bring me that. Bring me what's BEHIND that — why the ecosystem \
+tolerates it, what it implies for packages that depend on lodash, where the \
+actual risk concentrates."
+
+3. WHAT IMPRESSES US AND WHAT DOESN'T. Define the quality bar. What kind of \
+finding would make leadership say "we didn't know that"? What kind would make \
+them say "obvious"? Be concrete about the LEVEL OF SPECIFICITY you demand — \
+named entities, exact numbers, traceable evidence. But do NOT constrain the \
+KIND of novelty. Surprising findings can be about hidden vulnerabilities, \
+but they can equally be about ecosystem dynamics, adoption patterns, community \
+behavior, architectural anomalies, economic structures, or any other shape of \
+hidden structure that emerges from the data. \
+Generic category-level observations are not impressive ("many packages have \
+single maintainers"). Specific discoveries with evidence ARE impressive, \
+regardless of what dimension they're on — a hidden supply-chain chokepoint, \
+a surprising adoption dynamic between competing frameworks, an unusual \
+architectural pattern that reveals how the ecosystem actually evolves, a \
+download flow anomaly that exposes how packages actually get used vs how \
+they're marketed. The test is: would a knowledgeable practitioner say \
+"I didn't know that"? Not: "does this fit a particular category of finding?"
+
+4. WHAT THE STAKES ARE. Why does this investigation matter? What's the cost \
+of missing something? What would a great investigation enable that a mediocre \
+one wouldn't?
+
+CONSTRAINTS:
+- Write in directive voice. You are addressing your team, not writing a report.
+- Do NOT list investigation areas or suggest where to look — that's the \
+program office's job.
+- Do NOT specify organizational structure — that's also the program office's job.
+- DO incorporate the statistical findings and briefing into your framing — \
+they inform what's already known and what gaps exist.
+- Keep it under 800 words. Your team reads this before every quality decision. \
+It needs to be memorable, not exhaustive.
+
+Respond with ONLY the charter text. No JSON. No preamble. No metadata. \
+Just the directive.
+"""
+
+
+OPERATIONAL_PLAN_PROMPT = """\
+You are the program office for a research organization. The CEO has issued \
+the organizational charter below. Your job is to translate this directive \
+into operational reality.
+
+ORGANIZATIONAL CHARTER:
+{charter}
+
+CORPUS SHAPE:
+{corpus_shape}
+
+TOTAL BUDGET: ${budget:.2f}
+MINIMUM VIABLE WORKER ENVELOPE: ${leaf_viable_envelope:.2f}
+
+The total budget covers EVERYTHING — investigation, synthesis, validation, \
+impact analysis, report generation, and overhead. You decide how to split it.
+
+YOUR TASK: Produce the operational plan for this investigation. The plan has \
+two parts: rules of engagement, and initial scopes.
+
+PART 1 — RULES OF ENGAGEMENT
+
+Derive operational rules from the charter. These rules govern how every \
+worker in the organization behaves. They are not generic best practices — \
+they are specific policies that follow from THIS charter's directive.
+
+Cover whatever the charter's directive requires. For an exploration charter, \
+this likely includes:
+- Budget policy: how workers should spend, when to go deep vs stay broad
+- Budget allocation policy: downstream-phase allocations (synthesis, \
+validation, etc.) are CEILINGS, not reservations. Unused budget flows \
+back to the shared pool and becomes available for exploration. The pool \
+enforces actual spending; allocations are upper-bound estimates.
+- Evidence standards: what counts as sufficient evidence for a claim
+- Depth policy: when decomposition is warranted vs when to resolve
+- Quality bar: operational translation of the charter's "what impresses us"
+- Novelty requirement: how workers should treat commonly-known patterns
+
+Write rules that a worker at depth 5 could read and know exactly how to \
+behave. Concrete, not aspirational.
+
+PART 2 — INITIAL SCOPES
+
+Divide the investigation into initial scopes for top-level workers. Each \
+scope is a distinct area of investigation derived from the charter and \
+corpus shape.
+
+For each scope, determine its SCOPE LEVEL:
+- "manager": The territory is too broad for one worker. The receiving \
+worker will decompose immediately. Write the description in \
+territory-ownership language: "This subtree owns investigation of X. \
+Success at the subtree level means..." Help the manager reason about \
+how to divide the territory, not how to investigate directly.
+- "worker": A single worker can reasonably do this at the allocated \
+budget. Write in direct investigation-instruction language.
+- "ambiguous": The receiving worker should decide at runtime. Write \
+the description so it works for both a direct investigator and a \
+manager deciding whether to decompose.
+
+For each scope:
+- Scope level (manager / worker / ambiguous) with brief justification
+- What it investigates (voice matches scope level as described above)
+- Why it matters (traced back to the charter's directive)
+- Budget allocation (must sum to exploration budget; proportional to \
+expected complexity and charter priority)
+- Success criteria (what would a good result look like for this scope?)
+
+The number of scopes, what they cover, and how budget is distributed are \
+YOUR derivations from the charter. A different charter would produce \
+different scopes.
+
+BUDGET MATH:
+- Total budget: ${budget:.2f}
+- You must allocate EVERY dollar. No unaccounted reserves.
+- Scope budgets are for investigation work (workers exploring the corpus).
+- Downstream phases (synthesis, validation, impact analysis, report \
+generation, overhead from Genesis/Planner themselves) also cost money. \
+Estimate what each needs and state it explicitly in your budget allocation. \
+These are CEILINGS — unused budget flows back to exploration.
+- Each investigation scope's budget must be at least ${leaf_viable_envelope:.2f}
+- All allocations must sum to the total budget.
+
+Return JSON:
+{{
+    "rules_of_engagement": "the full rules text — written to be read by workers",
+    "initial_scopes": [
+        {{
+            "name": "scope name",
+            "scope_level": "manager | worker | ambiguous",
+            "scope_level_reasoning": "why this level",
+            "description": "what this scope investigates (voice matches scope level)",
+            "charter_rationale": "why the charter demands this investigation",
+            "budget": 0.00,
+            "success_criteria": "what good output looks like"
+        }}
+    ],
+    "budget_allocation": {{
+        "investigation_total": 0.00,
+        "synthesis": 0.00,
+        "validation": 0.00,
+        "impact_analysis": 0.00,
+        "report_generation": 0.00,
+        "overhead": 0.00,
+        "reasoning": "why this split"
+    }},
+    "depth_policy": "summary of depth guidance from rules"
 }}
 
 Respond ONLY with valid JSON, no other text.

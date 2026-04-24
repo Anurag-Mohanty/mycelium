@@ -276,59 +276,69 @@ class Orchestrator:
             self.budget = BudgetPool(total_budget=selected_budget)
             events.emit("budget_authorized", {"budget": selected_budget})
 
-        # --- Phase 0: Genesis (LLM reasons about the catalog statistics) ---
-        print(f"\n  [GENESIS] Surveying corpus structure...")
-        events.emit("phase_change", {"phase": "genesis"})
-        # Pass catalog records so genesis can sample from the broader set
-        # (2000 records) instead of fetching a fresh ~200 via survey().
-        # These are lightweight (headers + descriptions), not full metadata.
-        self.genesis_result = await run_genesis(
-            self.data_source, self.hints,
-            catalog_records=bulk_records,
-            survey_results=catalog_stats,
-        )
-        self.budget.record("overhead", self.genesis_result.get("cost", 0))
-        self._update_tokens(self.genesis_result.get("token_usage", {}))
-
-        lenses = self.genesis_result.get("lenses", [])
-        summary = self.genesis_result.get("corpus_summary", "")
-        structure = self.genesis_result.get("natural_structure", {})
-
-        print(f"  [GENESIS] {summary[:100]}...")
-        print(f"  [GENESIS] Lenses: {', '.join(lenses[:8])}...")
-
-        # Emit genesis reasoning so visualizer can show the thinking
-        events.emit("genesis_reasoning", {
-            "corpus_summary": summary,
-            "lenses": lenses,
-            "entry_points": [ep.get("area", "") for ep in self.genesis_result.get("suggested_entry_points", [])],
-            "recommended_cut": structure.get("recommended_first_cut", ""),
-            "division_axes": structure.get("division_axes", []),
-        })
-
-        if not lenses:
-            print("  [GENESIS] ERROR: No lenses. Aborting.")
-            return self._build_exploration_data()
-
-        # --- Briefing stage (v2 only) ---
+        # --- Briefing (load cached, or generate if needed) ---
         from . import prompts as _prompts
-        if _prompts.get_version() == "v2" and bulk_records:
+        briefing_text = ""
+        # Try loading cached briefing first
+        source_name = self.data_source.__class__.__name__
+        briefing_dir = Path("catalog/briefings")
+        if briefing_dir.exists():
+            for bp in sorted(briefing_dir.glob("briefing_*.md"), reverse=True):
+                if source_name.lower().replace("datasource", "").replace("_", "") in bp.stem.lower().replace("_", ""):
+                    briefing_text = bp.read_text()
+                    print(f"\n  [BRIEFING] Loaded cached briefing ({len(briefing_text)} chars)")
+                    break
+        if not briefing_text and _prompts.get_version() == "v2" and bulk_records:
             print(f"\n  [BRIEFING] Generating common knowledge baseline...")
             self._briefing = await generate_briefing(
-                genesis_result=self.genesis_result,
+                genesis_result={"corpus_summary": ""},
                 catalog_records=bulk_records,
                 survey_results=catalog_stats,
-                source_name=self.data_source.__class__.__name__,
+                source_name=source_name,
             )
             self.budget.record("overhead", self._briefing.cost)
             self._update_tokens(self._briefing.token_usage)
-            print(f"  [BRIEFING] Generated ({len(self._briefing.common_knowledge)} chars, "
+            briefing_text = self._briefing.common_knowledge
+            print(f"  [BRIEFING] Generated ({len(briefing_text)} chars, "
                   f"${self._briefing.cost:.3f})")
         else:
             self._briefing = None
 
-        # --- Phase 1: Planner ---
-        print(f"\n  [PLANNER] Creating exploration strategy...")
+        # --- Phase 0: Genesis (produces organizational charter) ---
+        print(f"\n  [GENESIS] Generating organizational charter...")
+        events.emit("phase_change", {"phase": "genesis"})
+        self.genesis_result = await run_genesis(
+            self.data_source, self.hints,
+            catalog_records=bulk_records,
+            survey_results=catalog_stats,
+            briefing_text=briefing_text,
+        )
+        self.budget.record("overhead", self.genesis_result.get("cost", 0))
+        self._update_tokens(self.genesis_result.get("token_usage", {}))
+
+        charter = self.genesis_result.get("charter", "")
+        summary = self.genesis_result.get("corpus_summary", "")
+        lenses = self.genesis_result.get("lenses", [])
+
+        print(f"  [GENESIS] Charter generated ({len(charter.split())} words)")
+        print(f"  [GENESIS] First 200 chars: {charter[:200]}...")
+
+        # Emit genesis reasoning for visualizer
+        events.emit("genesis_reasoning", {
+            "corpus_summary": summary,
+            "lenses": lenses,
+            "entry_points": [],
+            "recommended_cut": "",
+            "division_axes": [],
+            "charter_preview": charter[:500],
+        })
+
+        if not charter:
+            print("  [GENESIS] ERROR: No charter generated. Aborting.")
+            return self._build_exploration_data()
+
+        # --- Phase 1: Planner (produces operational plan from charter) ---
+        print(f"\n  [PLANNER] Creating operational plan from charter...")
         self.plan = await create_plan(self.genesis_result, self.budget.total)
         self.budget.record("overhead", self.plan.get("cost", 0))
         self._update_tokens(self.plan.get("token_usage", {}))
@@ -338,75 +348,74 @@ class Orchestrator:
         self.budget.set_segment_targets(seg_targets)
         self._planned_nodes = self.plan.get("estimated_total_nodes", 0)
 
-        print(f"  [PLANNER] Plan: {len(segments)} segments, "
-              f"~{self._planned_nodes or '?'} nodes")
+        # Print Phase F scope layout
+        print(f"  [PLANNER] Plan: {len(segments)} scopes, "
+              f"~{self._planned_nodes or '?'} estimated nodes")
         for seg in segments:
-            print(f"  ├── {seg['name']:25s} ${seg.get('sub_budget', 0):.2f} "
-                  f"(~{seg.get('estimated_nodes', '?')} nodes)")
-        dd_reserve = self.plan.get("deep_dive_reserve", 0)
-        print(f"  └── Deep-dive reserve      ${dd_reserve:.2f}")
+            level = seg.get('scope_level', '?')
+            print(f"  ├── {seg['name']:25s} ${seg.get('sub_budget', 0):.2f} [{level}]")
 
-        # Emit planner reasoning so visualizer shows the strategy
+        budget_alloc = self.plan.get("budget_allocation", {})
+        if budget_alloc:
+            print(f"  [PLANNER] Budget allocation (ceilings):")
+            for k, v in budget_alloc.items():
+                if k != "reasoning" and isinstance(v, (int, float)):
+                    print(f"    {k}: ${v:.2f}")
+
+        rules = self.plan.get("rules_of_engagement", "")
+        if rules:
+            print(f"  [PLANNER] Rules of engagement: {len(rules)} chars")
+
+        # Emit planner reasoning for visualizer
         events.emit("planner_reasoning", {
             "segment_count": len(segments),
             "estimated_nodes": self._planned_nodes,
             "segments": [
                 {"name": s["name"], "budget": s.get("sub_budget", 0),
                  "nodes": s.get("estimated_nodes", 0),
-                 "reasoning": s.get("reasoning", "")}
+                 "reasoning": s.get("reasoning", ""),
+                 "scope_level": s.get("scope_level", "ambiguous")}
                 for s in segments
             ],
-            "deep_dive_reserve": dd_reserve,
-            "deep_dive_strategy": self.plan.get("deep_dive_strategy", ""),
+            "deep_dive_reserve": 0,
+            "deep_dive_strategy": "Deep investigation within manager subtrees",
         })
 
-        # --- Read planner's exploration envelope (v2) or use static default ---
-        envelope_info = self.plan.get("exploration_envelope", {})
-        if envelope_info and envelope_info.get("percentage"):
-            raw_pct = envelope_info["percentage"]
-            clamped_pct = max(0.40, min(0.75, raw_pct))
-            if clamped_pct != raw_pct:
-                print(f"  [PLANNER] WARNING: exploration envelope {raw_pct:.0%} clamped to {clamped_pct:.0%}")
-            self.budget.phase_limits["exploration"] = clamped_pct
-            self._planner_envelope = {
-                "exploration_envelope_pct": round(clamped_pct, 3),
-                "exploration_envelope_dollars": round(self.budget.total * clamped_pct, 2),
-                "reasoning": envelope_info.get("reasoning", ""),
-                "raw_pct": round(raw_pct, 3),
-                "clamped": clamped_pct != raw_pct,
-            }
-            print(f"  [PLANNER] Exploration envelope: {clamped_pct:.0%} = "
-                  f"${self.budget.total * clamped_pct:.2f}")
-        else:
-            self._planner_envelope = {
-                "exploration_envelope_pct": self.budget.phase_limits["exploration"],
-                "exploration_envelope_dollars": round(
-                    self.budget.total * self.budget.phase_limits["exploration"], 2),
-                "reasoning": "default (planner did not specify)",
-                "raw_pct": self.budget.phase_limits["exploration"],
-                "clamped": False,
-            }
+        # --- Create org-level workspace ---
+        from .workspace import OrgWorkspace
+        workspace_dir = self.run_dir / "workspace"
+        self._workspace = OrgWorkspace(workspace_dir)
+        self._workspace.write_charter(charter)
+        self._workspace.write_rules(rules)
+        self._workspace.write_scopes(
+            self.plan.get("initial_scopes", []),
+            budget_alloc,
+        )
+        print(f"  [WORKSPACE] Org workspace created at {workspace_dir}")
+        self._workspace_path = str(workspace_dir)
 
-        # --- Read planner's max decomposition depth (v2) ---
-        depth_info = self.plan.get("max_decomposition_depth", {})
-        if isinstance(depth_info, dict) and depth_info.get("depth"):
-            raw_depth = depth_info["depth"]
-            self._max_depth = max(2, min(6, raw_depth))
-            if self._max_depth != raw_depth:
-                print(f"  [PLANNER] WARNING: max depth {raw_depth} clamped to {self._max_depth}")
-            self._planner_envelope["max_decomposition_depth"] = self._max_depth
-            self._planner_envelope["depth_reasoning"] = depth_info.get("reasoning", "")
-            self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
-            print(f"  [PLANNER] Max decomposition depth: {self._max_depth} "
-                  f"(leaf viable: ${LEAF_VIABLE_ENVELOPE:.2f})")
-        elif isinstance(depth_info, (int, float)):
-            self._max_depth = max(2, min(6, int(depth_info)))
-            self._planner_envelope["max_decomposition_depth"] = self._max_depth
-            self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
-        else:
-            self._max_depth = 3  # sensible default
-            self._planner_envelope["max_decomposition_depth"] = self._max_depth
-            self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
+        # --- Phase F exploration envelope from budget allocation ---
+        inv_total = budget_alloc.get("investigation_total", self.budget.total * 0.50)
+        exploration_pct = inv_total / self.budget.total if self.budget.total > 0 else 0.50
+        # Phase F: downstream allocations are ceilings. Set exploration limit
+        # generously — actual downstream spending is far lower than allocations.
+        effective_pct = max(0.40, min(0.85, exploration_pct + 0.20))  # add headroom for ceiling slack
+        self.budget.phase_limits["exploration"] = effective_pct
+        self._planner_envelope = {
+            "exploration_envelope_pct": round(effective_pct, 3),
+            "exploration_envelope_dollars": round(self.budget.total * effective_pct, 2),
+            "reasoning": f"Phase F: investigation {exploration_pct:.0%} + 20% ceiling headroom",
+            "raw_pct": round(exploration_pct, 3),
+            "clamped": False,
+        }
+        print(f"  [PLANNER] Effective exploration limit: {effective_pct:.0%} = "
+              f"${self.budget.total * effective_pct:.2f} (ceilings release unused budget)")
+
+        # Phase F relaxes depth — budget is the real constraint, not depth caps
+        self._max_depth = 6  # permissive upper bound (safety circuit)
+        self._planner_envelope["max_decomposition_depth"] = self._max_depth
+        self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
+        print(f"  [PLANNER] Max depth: {self._max_depth} (budget-governed, not capped)")
 
         # --- Phase 2: Exploration ---
         print(f"\n  {'─'*54}")
@@ -465,13 +474,14 @@ class Orchestrator:
                     description=seg.get("scope_description", seg["name"]),
                 ),
                 lenses=lenses,
-                parent_context=f"Planner assigned this segment: {seg.get('reasoning', '')}",
+                parent_context=f"Planner assigned this scope: {seg.get('reasoning', '')}",
                 purpose=purpose,
                 tree_position=str(i),
                 segment_id=seg["name"],
                 survey_anomalies=seg_anomalies,
+                workspace_path=self._workspace_path,
+                scope_level=seg.get("scope_level", "ambiguous"),
             )
-            briefing_text = self._briefing.common_knowledge if self._briefing else ""
             worker = WorkerNode(
                 directive=directive,
                 data_source=self.data_source,
@@ -484,7 +494,7 @@ class Orchestrator:
                 depth=0,
                 max_depth=self._max_depth,
                 leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
-                briefing=briefing_text,
+                briefing="",  # Phase F uses workspace instead
             )
             segment_workers.append(worker)
 
@@ -836,10 +846,10 @@ class Orchestrator:
                 purpose=target.get("investigation_directive", target.get("why_this_one", "")),
                 tree_position=f"DD.{i}",
                 segment_id="deep_dive",
+                workspace_path=getattr(self, '_workspace_path', None),
             )
 
             # Use WorkerNode so thinking events stream to the visualizer
-            briefing_text = self._briefing.common_knowledge if self._briefing else ""
             worker = WorkerNode(
                 directive=directive,
                 data_source=self.data_source,
@@ -852,19 +862,17 @@ class Orchestrator:
                 depth=0,
                 max_depth=self._max_depth,
                 leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
-                briefing=briefing_text,
+                briefing="",
             )
             worker_result = await worker.run()
 
-            # Convert to NodeResult for downstream pipeline
-            result = self._worker_result_to_node_result(worker_result)
-            self.all_node_results.append(result)
-            self.stats.observations_collected += len(result.observations)
+            # Save full worker tree — same path as exploration workers
+            self._collect_worker_stats([worker])
+            self._collect_worker_node_results([worker])
+            self._write_diagnostics([worker])
             self.stats.deep_dives_executed += 1
-            # Worker already recorded to budget pool, just track the cost
-            self._save_node(result)
 
-            n_obs = len(result.observations)
+            n_obs = len(worker.observations)
             print(f"  [DEEP-DIVE {i}] RESOLVED: {n_obs} observations")
 
     # --- Validation ---
@@ -1568,11 +1576,14 @@ Respond ONLY with a JSON array."""}],
                          "evidence": {"description": combo.get("description", ""),
                                       "overrepresentation": combo.get("overrepresentation")}})
         for conc in all_anomalies.get("concentrations", []):
+            top_vals = conc.get("top_values", [])
+            dominant = top_vals[0]["value"] if top_vals else ""
             flat.append({"type": "concentration",
                          "description": f"{conc.get('concentration_pct', '?')}% in {conc.get('field', '?')}",
                          "flagged_by": ["entity_concentration"],
                          "evidence": {"field": conc.get("field"), "concentration_pct": conc.get("concentration_pct"),
-                                      "dominant_value": conc.get("dominant_value", "")}})
+                                      "dominant_value": dominant,
+                                      "top_values": [{"value": v["value"], "pct": v["pct"]} for v in top_vals[:3]]}})
         for key in ("content_anomalies", "entity_anomalies", "graph_anomalies",
                     "similarity_anomalies", "velocity_anomalies"):
             for a in all_anomalies.get(key, []):
@@ -1779,7 +1790,9 @@ Respond ONLY with a JSON array."""}],
         weakened = sum(1 for v in self.all_validations if v.verdict == "weakened")
         refuted = sum(1 for v in self.all_validations if v.verdict == "refuted")
         needs_verification = sum(1 for v in self.all_validations if v.verdict == "needs_verification")
+        pipeline_issues = sum(1 for v in self.all_validations if v.is_pipeline_issue)
         total_validated = len(self.all_validations)
+        corpus_validated = total_validated - pipeline_issues
 
         total_obs = self.stats.observations_collected
         total_nodes = len(all_workers) if all_workers else self.stats.nodes_spawned
@@ -1811,7 +1824,12 @@ Respond ONLY with a JSON array."""}],
                 "findings_weakened": weakened,
                 "findings_refuted": refuted,
                 "findings_needs_verification": needs_verification,
-                "validation_rate": round((confirmed + confirmed_with_caveats) / max(1, total_validated), 3),
+                "findings_pipeline_issue": pipeline_issues,
+                "validation_rate_corpus": round(
+                    sum(1 for v in self.all_validations
+                        if v.verdict in ("confirmed", "confirmed_with_caveats") and not v.is_pipeline_issue)
+                    / max(1, corpus_validated), 3),
+                "validation_rate_total": round((confirmed + confirmed_with_caveats) / max(1, total_validated), 3),
                 "observations_per_node": round(total_obs / max(1, total_nodes), 2),
                 "observations_per_dollar": round(total_obs / max(0.01, total_cost), 1),
                 "zero_obs_nodes": zero_obs_nodes,
@@ -1933,6 +1951,8 @@ def _validation_to_dict(v: ValidationResult) -> dict:
         "verdict": v.verdict, "reasoning": v.reasoning,
         "factual_assessment": v.factual_assessment,
         "interpretive_assessment": v.interpretive_assessment,
+        "is_pipeline_issue": v.is_pipeline_issue,
+        "pipeline_issue_reasoning": v.pipeline_issue_reasoning,
         "adjusted_confidence": v.adjusted_confidence, "adjusted_tier": v.adjusted_tier,
         "verification_action": v.verification_action, "revised_finding": v.revised_finding,
         "cost": v.cost,

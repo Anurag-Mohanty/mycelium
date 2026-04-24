@@ -25,6 +25,7 @@ class NpmRegistrySource(DataSource):
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=30.0)
         self._last_call = 0.0
+        self._enriched_index = None  # lazy-loaded from catalog/npm_enriched.jsonl
 
     async def _rate_limit(self):
         """500ms between API calls."""
@@ -222,9 +223,30 @@ class NpmRegistrySource(DataSource):
         """Fetch a single package's full details by name."""
         return await self._get_package_metadata(doc_id) or {"id": doc_id, "error": "not found"}
 
+    def _load_enriched_index(self):
+        """Lazy-load the enriched cache into a name→record dict."""
+        if self._enriched_index is not None:
+            return
+        import json as _json
+        from pathlib import Path as _Path
+        cache_path = _Path("catalog/npm_enriched.jsonl")
+        if cache_path.exists() and cache_path.stat().st_size > 1000:
+            self._enriched_index = {}
+            with open(cache_path) as f:
+                for line in f:
+                    if line.strip():
+                        r = _json.loads(line)
+                        self._enriched_index[r.get("name", r.get("id", ""))] = r
+        else:
+            self._enriched_index = {}
+
     async def _get_package_metadata(self, name: str) -> dict | None:
-        """Fetch full package metadata from registry."""
-        # Use abbreviated metadata for speed (only latest version)
+        """Fetch package metadata — from enriched cache if available, else live."""
+        self._load_enriched_index()
+        if name in self._enriched_index:
+            return self._enriched_index[name]
+
+        # Live fallback: use abbreviated metadata for speed (only latest version)
         data = await self._get(f"{REGISTRY_URL}/{name}/latest")
         if not data:
             return None

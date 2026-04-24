@@ -64,6 +64,8 @@ class Directive:
     chain_depth: int = 0
     segment_id: Optional[str] = None  # which planner segment this belongs to
     survey_anomalies: list = field(default_factory=list)  # statistical anomalies relevant to this scope
+    workspace_path: Optional[str] = None  # path to org-level workspace directory
+    scope_level: str = "ambiguous"  # manager | worker | ambiguous
 
 
 @dataclass
@@ -158,6 +160,8 @@ class ValidationResult:
     raw_reasoning: str
     factual_assessment: dict = field(default_factory=dict)
     interpretive_assessment: dict = field(default_factory=dict)
+    is_pipeline_issue: bool = False
+    pipeline_issue_reasoning: str = ""
     token_usage: dict = field(default_factory=dict)
     cost: float = 0.0
 

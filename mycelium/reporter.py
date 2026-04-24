@@ -66,10 +66,14 @@ async def generate_report(exploration_data: dict) -> str:
         f"Time elapsed: {minutes}m {seconds}s"
     )
 
-    # Format sections
+    # Separate pipeline issues from corpus findings
+    corpus_validations = [v for v in validations if not v.get("is_pipeline_issue")]
+    pipeline_validations = [v for v in validations if v.get("is_pipeline_issue")]
+
+    # Format sections (corpus findings only for the main report)
     synthesis_text = _format_syntheses(syntheses)
     observations_text = _format_observations(all_observations)
-    validated_text = _format_validations(validations)
+    validated_text = _format_validations(corpus_validations)
     impact_text = _format_impacts(impacts)
     unresolved_text = "\n".join(f"- {u}" for u in all_unresolved) if all_unresolved else "(none)"
     hints_text = "\n".join(f"- {h}" for h in hints) if hints else "none — fully autonomous"
@@ -100,6 +104,35 @@ async def generate_report(exploration_data: dict) -> str:
         "output_tokens": response.usage.output_tokens,
     }
     cost = (usage["input_tokens"] * 3 + usage["output_tokens"] * 15) / 1_000_000
+
+    # Add pipeline warning banner if any pipeline issues found
+    if pipeline_validations:
+        n = len(pipeline_validations)
+        banner = (
+            f"\n> **{n} finding(s) in this run were flagged as data pipeline issues "
+            f"rather than corpus discoveries — see the \"Data Pipeline Observations\" "
+            f"section below. Corpus findings in this report were produced from data "
+            f"that may be affected by the same underlying issues.**\n"
+        )
+        # Insert after first heading + corpus summary paragraph
+        insert_pos = report.find("\n## ")
+        if insert_pos > 0:
+            report = report[:insert_pos] + "\n" + banner + report[insert_pos:]
+
+        # Append pipeline section
+        pipeline_section = "\n\n## Data Pipeline Observations\n\n"
+        pipeline_section += (
+            "The following findings describe properties of Mycelium's data collection "
+            "and extraction process rather than the corpus itself.\n\n"
+        )
+        for pv in pipeline_validations:
+            finding = pv.get("original_finding", {})
+            desc = (finding.get("what_conflicts", "") or finding.get("pattern", ""))[:200]
+            pipeline_section += f"### Pipeline Finding: {desc[:80]}\n"
+            pipeline_section += f"**What was observed:** {desc}\n"
+            pipeline_section += f"**Likely cause:** {pv.get('pipeline_issue_reasoning', '')[:200]}\n"
+            pipeline_section += f"**Validation:** {pv.get('verdict', '?').upper()}\n\n"
+        report += pipeline_section
 
     print(f"  Report generated. Cost: ${cost:.4f}")
     return report

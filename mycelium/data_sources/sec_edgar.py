@@ -747,7 +747,8 @@ def _extract_risk_factors(html: str) -> str | None:
     text = re.sub(r'\s+', ' ', text)
 
     # Find ALL occurrences of "Item 1A" — pick the one followed by the most text
-    pattern = re.compile(r'Item\s+1A[\.\s\-—:]+\s*Risk\s+Factors', re.IGNORECASE)
+    # Tolerate whitespace within words caused by HTML tag stripping (e.g. "Ri sk" from "Ri</span>sk")
+    pattern = re.compile(r'Item\s+1A[\.\s\-—:]+\s*R\s*i\s*s\s*k\s+F\s*a\s*c\s*t\s*o\s*r\s*s', re.IGNORECASE)
     matches = list(pattern.finditer(text))
 
     if not matches:

@@ -1,64 +1,48 @@
-"""Planner — creates a budget-aware exploration strategy.
+"""Planner — Phase F operational plan from charter.
 
-Single LLM call after Genesis, before exploration begins. Takes the corpus
-shape and budget, returns a plan with segment allocations and depth targets.
-The plan is ADVISORY — segment budgets are soft targets, not hard caps.
+Reads the charter and produces: rules of engagement, initial scopes with
+scope levels, and budget allocation. Maps scopes to segment format for
+backward compatibility with the orchestrator.
 """
 
 import json
 import anthropic
-from .prompts import PLANNER_PROMPT
+from .prompts import OPERATIONAL_PLAN_PROMPT
 
 
 async def create_plan(genesis_result: dict, total_budget: float) -> dict:
-    """Create an exploration plan based on corpus shape and budget.
+    """Create an operational plan from the charter.
 
     Args:
-        genesis_result: Output from genesis (corpus_summary, lenses, structure)
+        genesis_result: Output from genesis (must contain 'charter')
         total_budget: Total budget in dollars
 
     Returns:
-        Plan dict with segments, sub-budgets, depth targets, deep-dive strategy
+        Plan dict with segments (mapped from scopes), rules, budget allocation
     """
-    from . import prompts as _prompts
+    from .orchestrator import LEAF_VIABLE_ENVELOPE
 
-    lenses = genesis_result.get("lenses", [])
-    exploration_budget = total_budget * 0.50
-    estimated_nodes = int(exploration_budget / 0.04)
+    charter = genesis_result.get("charter", "")
+    if not charter:
+        raise ValueError("Genesis result must contain 'charter' for Phase F planner")
 
-    genesis_json = json.dumps({
-        "corpus_summary": genesis_result.get("corpus_summary", ""),
-        "lenses": lenses,
-        "suggested_entry_points": genesis_result.get("suggested_entry_points", []),
-        "natural_structure": genesis_result.get("natural_structure", {}),
+    # Build corpus shape from genesis metadata
+    corpus_shape = json.dumps({
+        "source": "catalog",
+        "charter_word_count": len(charter.split()),
     }, indent=2)
 
-    # v2 planner gets envelope reasoning params; v1 gets static allocation params
-    if _prompts.get_version() == "v2":
-        from .orchestrator import LEAF_VIABLE_ENVELOPE
-        prompt = PLANNER_PROMPT.format(
-            genesis_output=genesis_json,
-            budget=total_budget,
-            num_lenses=len(lenses),
-            review_budget=total_budget * 0.15,
-            leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
-        )
-    else:
-        prompt = PLANNER_PROMPT.format(
-            genesis_output=genesis_json,
-            budget=total_budget,
-            exploration_budget=exploration_budget,
-            synthesis_budget=total_budget * 0.18,
-            deep_dive_budget=total_budget * 0.08,
-            validation_budget=total_budget * 0.07,
-            overhead_budget=total_budget * 0.07,
-            estimated_nodes=estimated_nodes,
-        )
+    prompt = OPERATIONAL_PLAN_PROMPT.format(
+        charter=charter,
+        corpus_shape=corpus_shape,
+        budget=total_budget,
+        leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
+    )
 
     client = anthropic.Anthropic()
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=2500,
+        max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -72,22 +56,55 @@ async def create_plan(genesis_result: dict, total_budget: float) -> dict:
     try:
         plan = _parse_json(raw_text)
     except (json.JSONDecodeError, ValueError):
-        # Fallback: single-segment plan
+        # Fallback: single-scope plan
         plan = {
-            "exploration_budget": exploration_budget,
-            "estimated_total_nodes": estimated_nodes,
-            "segments": [{
-                "name": "full_corpus",
-                "scope_description": genesis_result.get("corpus_summary", "Full exploration"),
-                "estimated_complexity": "high",
-                "sub_budget": exploration_budget,
-                "estimated_nodes": estimated_nodes,
-                "target_depth": 3,
-                "reasoning": "Fallback plan — planner output could not be parsed",
+            "rules_of_engagement": "Investigate thoroughly. Cite specific evidence.",
+            "initial_scopes": [{
+                "name": "full_investigation",
+                "scope_level": "ambiguous",
+                "scope_level_reasoning": "Fallback — planner output could not be parsed",
+                "description": "Investigate the full corpus",
+                "charter_rationale": "Fallback plan",
+                "budget": total_budget * 0.50,
+                "success_criteria": "Named findings with evidence",
             }],
-            "deep_dive_reserve": total_budget * 0.10,
-            "deep_dive_strategy": "Investigate the most surprising findings from initial sweep",
+            "budget_allocation": {
+                "investigation_total": total_budget * 0.50,
+                "synthesis": total_budget * 0.10,
+                "validation": total_budget * 0.10,
+                "impact_analysis": total_budget * 0.10,
+                "report_generation": total_budget * 0.10,
+                "overhead": total_budget * 0.10,
+                "reasoning": "Fallback — planner output could not be parsed",
+            },
+            "depth_policy": "Budget governs depth",
         }
+
+    # Map initial_scopes to segments format for backward compat
+    scopes = plan.get("initial_scopes", [])
+    plan["segments"] = [
+        {
+            "name": scope.get("name", f"scope_{i}"),
+            "scope_description": scope.get("description", ""),
+            "filters": {},  # Phase F scopes don't use keyword filters
+            "estimated_complexity": "high" if scope.get("scope_level") == "manager" else "medium",
+            "sub_budget": scope.get("budget", 0),
+            "estimated_nodes": max(1, int(scope.get("budget", 0) / 0.15)),
+            "reasoning": scope.get("charter_rationale", ""),
+            # Phase F fields
+            "scope_level": scope.get("scope_level", "ambiguous"),
+            "scope_level_reasoning": scope.get("scope_level_reasoning", ""),
+            "success_criteria": scope.get("success_criteria", ""),
+        }
+        for i, scope in enumerate(scopes, 1)
+    ]
+
+    # Backward compat fields
+    budget_alloc = plan.get("budget_allocation", {})
+    plan["exploration_budget"] = budget_alloc.get("investigation_total", total_budget * 0.50)
+    plan["estimated_total_nodes"] = sum(s.get("estimated_nodes", 1) for s in plan["segments"])
+    plan["deep_dive_reserve"] = 0  # Phase F doesn't have a separate deep-dive reserve
+    plan["deep_dive_strategy"] = "Deep investigation happens within manager subtrees"
 
     plan["token_usage"] = usage
     plan["cost"] = cost

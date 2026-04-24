@@ -50,6 +50,7 @@ class WorkerNode:
         self.node_id = directive.node_id
         self.pos = directive.tree_position
         self.segment_id = directive.segment_id
+        self._workspace_path = directive.workspace_path
 
         self.observations = []
         self.child_workers = []
@@ -220,6 +221,7 @@ class WorkerNode:
                 chain_depth=(self.directive.chain_depth + 1) if n_children == 1 else 0,
                 segment_id=self.segment_id,
                 survey_anomalies=self.directive.survey_anomalies,
+                workspace_path=self._workspace_path,
             )
 
             child = WorkerNode(
@@ -468,8 +470,41 @@ class WorkerNode:
                 f"reject spawns below this minimum."
             )
 
-        # Build briefing context block
-        if self._briefing:
+        # Build briefing context block — Phase F uses workspace charter/rules
+        briefing_context = ""
+        if self._workspace_path:
+            from .workspace import OrgWorkspace
+            ws = OrgWorkspace(self._workspace_path)
+            charter = ws.read_charter()
+            rules = ws.read_rules()
+            if charter:
+                briefing_context += (
+                    "## ORGANIZATIONAL CHARTER (read this — it defines quality standards)\n\n"
+                    + charter + "\n\n"
+                )
+            if rules:
+                briefing_context += (
+                    "## RULES OF ENGAGEMENT (operational policies for all workers)\n\n"
+                    + rules + "\n\n"
+                )
+            # Add scope level guidance
+            scope_level = self.directive.scope_level
+            if scope_level == "manager":
+                briefing_context += (
+                    "## SCOPE LEVEL: MANAGER\n\n"
+                    "Your scope is too broad to investigate directly. You should "
+                    "decompose into sub-scopes for children. Reason about how to "
+                    "divide your territory into distinct investigation threads, then "
+                    "create child directives for each thread.\n\n"
+                )
+            elif scope_level == "ambiguous":
+                briefing_context += (
+                    "## SCOPE LEVEL: AMBIGUOUS\n\n"
+                    "You decide whether to investigate directly or decompose. If your "
+                    "initial survey reveals multiple distinct threads worth pursuing, "
+                    "decompose. If one thread dominates, investigate it directly.\n\n"
+                )
+        elif self._briefing:
             briefing_context = (
                 "## Common Knowledge About This Corpus\n\n"
                 "The following patterns are widely known about this corpus. "
@@ -477,8 +512,6 @@ class WorkerNode:
                 "Look for patterns these claims would NOT already cover:\n\n"
                 + self._briefing
             )
-        else:
-            briefing_context = ""
 
         import datetime
         prompt = NODE_REASONING_PROMPT.format(
@@ -666,6 +699,7 @@ class WorkerNode:
                 tree_position=f"{self.pos}.F{i}",
                 segment_id=self.segment_id,
                 survey_anomalies=self.directive.survey_anomalies,
+                workspace_path=self._workspace_path,
             )
 
             child = WorkerNode(
