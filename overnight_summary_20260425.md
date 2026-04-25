@@ -92,13 +92,47 @@ criteria (novel=YES, leakage=NO) are met.
 
 | Build | Offline | Pipeline | Overall |
 |---|---|---|---|
-| C (Manager Turn 2) | PASS (3/3) | *running* | *pending* |
+| C (Manager Turn 2) | PASS (3/3) | PASS (mechanism works, budget issue) | PASS |
 | D (Reader Test) | PASS (2/2 critical) | integrated | PASS |
 | E (Synthesis Role) | PASS | integrated | PASS |
 
-## Preliminary $5 Run
-- Status: BLOCKED on Build C mini-run completion
-- Will run if Build C mini-run completes without errors
+## Preliminary $5 Run — IN PROGRESS (run f77d1716)
+
+**Critical finding: continuation runaway.**
+
+The $5 run has spawned 147+ nodes (vs 18 at $2). The Turn 2 CONTINUE
+mechanism creates deep continuation chains — each continuation spawns
+more hires, each hire gets Turn 2, each Turn 2 spawns more continuations.
+At $5 there's enough budget to sustain this cascade for many levels.
+
+This is the same budget discipline issue from the $2 Build C run, amplified.
+At $2, the tree went to depth 4 with 18 nodes and overshot budget by 5%.
+At $5, the tree is going to depth 5+ with 147+ nodes.
+
+**Root cause:** The CONTINUE decision allocates the full remaining manager
+budget to a single continuation, which then becomes a new manager with its
+own Turn 2. Each level of continuation creates a new manager that can
+CONTINUE again. There's no mechanism to limit continuation depth or
+reserve budget for downstream phases.
+
+**$5 run completed (run 32184e87):**
+- 38 nodes, 81 observations, depth 5, $4.98/$5.00 (99.7% used)
+- Exploration: $4.30 (86%), Review (Turn 2): $0.40 (8%), Synthesis: $0.09 (2%)
+- Validation: $0.00, Deep-dives: $0.00, Impact: $0.00 — budget exhausted
+- $1.33 wasted on zero-obs nodes (27% of budget on nodes too thin to produce)
+- 6 findings reached synthesis but could not be validated
+- Authored synthesis role used ("ecosystem intelligence synthesizer")
+- Multiple POOR_REASONING classifications across managers — mechanism works
+- Report generated but unvalidated
+
+**This needs architectural attention before $10 runs.** Options to discuss:
+1. Cap continuation depth (e.g., max 1 continuation per manager)
+2. Reserve downstream budget before allocating to continuations
+3. Reduce continuation allocation (e.g., 50% of remaining, not 100%)
+4. Let the engagement lead specify a continuation policy in the org design
+
+This is NOT a prompt iteration issue — it's a structural budget flow
+question that needs human judgment.
 
 ## Anything Surprising or Ambiguous
 
@@ -121,14 +155,30 @@ criteria (novel=YES, leakage=NO) are met.
    reader test should also check evidence trustworthiness, or whether that's
    a separate check.
 
-4. **No architectural decisions deferred:** All builds followed the specified
-   approach without encountering ambiguities that required human judgment.
+4. **Continuation runaway (STOP — needs human judgment):** The Turn 2 CONTINUE
+   mechanism creates unbounded continuation chains. At $2 this produced 18
+   nodes (manageable). At $5 this produced 147+ nodes (runaway). Each
+   continuation spawns a new manager with its own Turn 2, which can CONTINUE
+   again with the full remaining budget. No mechanism limits this cascade.
+   
+   This is an architectural decision about budget flow that was not specified
+   in the build prompts. I am documenting it and stopping before the $10
+   gate runs, as instructed. The four options listed in the $5 run section
+   above need review before proceeding.
 
 ## Recommended Next Steps
 
-1. Review Build C mini-run results when complete
-2. If all builds pass, review the preliminary $5 run results
-3. Run $10 final gate on npm AND SEC (requires review first)
-4. Consider whether reader test needs artifact-awareness calibration
-5. Consider whether Turn 2 continuation budget should be capped to prevent
-   deep-but-thin trees at small budgets
+1. **BLOCKING: Fix continuation runaway before any $10 run.** The Turn 2
+   CONTINUE mechanism needs a structural budget limit. Without it, $10
+   runs will produce 300+ node trees that exhaust exploration budget before
+   reaching downstream phases. Decision needed on which mechanism to use.
+
+2. Review $5 run results when complete — observe tree shape and whether
+   any findings survived to synthesis/validation despite the deep tree.
+
+3. After continuation fix, run $10 final gate on npm AND SEC.
+
+4. Consider whether reader test needs artifact-awareness calibration.
+
+5. Consider whether deep-dive nodes should migrate from old WorkerNode to
+   RoleWorkerNode for consistency.
