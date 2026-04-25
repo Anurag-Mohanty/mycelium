@@ -1,132 +1,117 @@
-# Architectural Gate Summary
+# Architectural Gate Summary (Final)
 
-## Two $10 Runs — Full Pipeline
+## Two $10 Runs — Full Pipeline with Diagnostics + Reader Test
 
-### npm $10 (run 44239639)
+### npm $10 (run fe9cd62f)
 
 | Metric | Value |
 |---|---|
-| Nodes | 31 |
-| Observations | 126 |
+| Nodes | 15 |
+| Observations | 45 |
 | Depth | 3 |
-| Cost | $4.60 / $10.00 (46%) |
+| Cost | $2.38 / $10.00 (24%) |
 | Zero-obs nodes | 0 |
 | Findings submitted | 4 |
-| Confirmed | 1 |
-| Weakened | 3 |
-| Pipeline issues | 2 |
-| Reader test | **1 YES, 0 marginal, 0 no** |
+| Confirmed | 0, Weakened 4 |
+| Pipeline issues | 0 |
+| Diagnostics | 15 nodes, 15 diagnostics, full_diagnostic.txt |
+| **Reader test** | **1 YES, 2 marginal, 1 no** |
 
-**Confirmed finding:** "Scoped Package Download Metric Failure" — scored YES
-by reader test. A practitioner would say "I didn't know that."
+**Reader test findings:**
+- **YES:** "Missing react-is Dependency Trail" — genuinely novel finding
+- MARGINAL: "Zero-Dependency Risk Amplification"
+- MARGINAL: "Utility-to-Infrastructure Scope Inversion"
+- NO: "Corporate Backing vs Individual Control Paradox" — known pattern
 
-Budget allocation: exploration $3.79 (82%), review $0.43, synthesis $0.06,
-deep-dive $0.01, validation $0.09, impact $0.03, overhead $0.20. Full
-downstream pipeline ran with budget remaining.
+Budget: explore=$1.86, review=$0.16, synth=$0.04, dive=$0.01, valid=$0.09, impact=$0.03
 
-### SEC $10 (run 73095441)
+### SEC $10 (run db77f81e)
 
 | Metric | Value |
 |---|---|
-| Nodes | 19 |
-| Observations | 45 |
-| Depth | 2 |
-| Cost | $2.00 / $10.00 (20%) |
+| Nodes | 10 |
+| Observations | 26 |
+| Depth | 1 |
+| Cost | $1.48 / $10.00 (15%) |
 | Zero-obs nodes | 0 |
 | Findings submitted | 3 |
-| Confirmed | 0 |
-| Weakened | 3 |
+| Confirmed | 0, Weakened 2 |
 | Pipeline issues | 0 |
-| Reader test | **0 YES, 3 marginal, 0 no** |
+| Diagnostics | 10 nodes, 10 diagnostics, full_diagnostic.txt |
+| **Reader test** | **1 YES, 0 marginal, 2 no** |
 
-**Three marginal findings:**
-1. Strategic Disclosure Manipulation vs. Compliance Framework
-2. Anticipatory Legal Positioning Through Disclosure Timing
-3. Parallel Disclosure Universes Within Identical Business Categories
+**Reader test findings:**
+- **YES:** "Regulatory Exemption Interpretation Void" — genuinely novel finding
+- NO: "3M 2025 Data Availability Conflict"
+- NO: "Systematic Peer Group Deviation Signals"
 
-SEC run used only 20% of budget — the economics reasoning was very
-conservative on SEC data, producing a shallow tree. The findings are
-interpretively interesting (strategic disclosure manipulation, anticipatory
-legal positioning) but scored marginal, not yes.
+Budget: explore=$1.06, review=$0.10, synth=$0.04, dive=$0.01, valid=$0.06, impact=$0.01
 
-## Comparison: What the Architecture Produces
+## Side-by-Side Comparison
 
 | | npm $10 | SEC $10 |
 |---|---|---|
-| Reader test YES | 1 | 0 |
-| Reader test MARGINAL | 0 | 3 |
-| Reader test NO | 0 | 0 |
-| Budget used | 46% | 20% |
-| Observations | 126 | 45 |
-| Depth | 3 | 2 |
-| Zero-obs nodes | 0 | 0 |
+| Reader test YES | **1** | **1** |
+| Reader test MARGINAL | 2 | 0 |
+| Reader test NO | 1 | 2 |
+| Budget used | 24% | 15% |
+| Nodes | 15 | 10 |
+| Observations | 45 | 26 |
+| Depth | 3 | 1 |
 | Full pipeline | yes | yes |
+| Diagnostics | yes | yes |
+| Zero-obs nodes | 0 | 0 |
 
-## Architecture Behavior
+## What the Architecture Produces
 
-Both runs demonstrate the full architecture working end-to-end:
+**Both corpora produced exactly 1 YES finding each.** The reader test
+correctly discriminates: known patterns score NO, partially novel
+findings score MARGINAL, genuinely novel findings score YES.
 
-1. **Role authoring:** Engagement lead hired department heads with authored
-   roles, bars, and heuristics. Each department head assessed whether to
-   investigate or hire further.
+npm YES: "Missing react-is Dependency Trail" — a specific hidden
+dependency chain that a practitioner wouldn't know about.
 
-2. **Economics reasoning:** Managers stopped hiring when the work didn't
-   warrant delegation overhead. No continuation runaway. Budget remained
-   for downstream phases.
+SEC YES: "Regulatory Exemption Interpretation Void" — a specific
+gap in how regulatory exemptions are interpreted across filings.
 
-3. **Turn 2 bar evaluation:** Managers evaluated hires against authored bars.
-   MET, POOR_REASONING, and WRONG_ROLE classifications in both runs.
+## Architecture Behavior (Full)
 
-4. **Deep-dive migration:** Deep-dive nodes used RoleWorkerNode with
-   formation assessment, economics, and Turn 2. No cascade.
+1. **Role authoring** — engagement lead hired department heads with
+   authored roles, bars, heuristics at both corpora
+2. **Economics reasoning** — no continuation runaway, budget remained
+   for all downstream phases
+3. **Turn 2 bar evaluation** — MET, POOR_REASONING, WRONG_ROLE
+   classifications in both runs
+4. **Diagnostics** — per-node JSON, per-node diagnostics,
+   full_diagnostic.txt with role names, bars, thinking traces
+5. **Authored synthesis** — synthesis role authored by engagement lead
+6. **Deep-dive migration** — RoleWorkerNode with formation assessment
+7. **Validation + significance + impact** — all ran on real budget
+8. **Reader test** — scored every Tier 3-5 finding against charter
+9. **Zero zero-obs nodes** — no wasted budget
 
-5. **Authored synthesis:** Synthesis role authored by engagement lead.
-   Cross-referencing anchored on the synthesis bar.
+## Budget Underutilization
 
-6. **Validation, significance, impact:** All ran on real budget.
+npm used 24%, SEC used 15% of $10 budgets. The economics reasoning
+is conservative — managers default to investigating rather than hiring,
+producing shallow trees. This is the tradeoff from fixing the
+continuation runaway: no cascade, but also less depth than the budget
+could support.
 
-7. **Reader test:** Scored findings against charter standards. npm produced
-   1 YES. SEC produced 3 MARGINAL.
+Whether this is the right calibration depends on whether 1 YES finding
+per $10 per corpus is the right quality/quantity target. More aggressive
+hiring would produce more observations and potentially more findings,
+but also risks the cascade returning.
 
-8. **Zero zero-obs nodes** in both runs. No wasted budget.
+## Open Questions
 
-## Assessment
+1. **Budget calibration** — 15-24% utilization leaves $7.50-8.50 on
+   the table. Is the economics reasoning too conservative?
 
-**The architecture is whole and self-regulating.** One architectural
-primitive (RoleWorkerNode) applied recursively at every layer — exploration,
-continuations, deep-dives. Economics reasoning prevents cascade. Turn 2
-evaluates against authored bars. Reader test provides the quality gate.
+2. **SEC depth 1** — only reached depth 1, meaning the engagement lead
+   hired workers who all investigated directly, none decomposed further.
+   SEC's multi-entity filing data may genuinely need deeper analysis.
 
-**npm finding quality:** 1 YES out of 1 confirmed finding. The architecture
-produced fewer findings than the old pipeline but the one it confirmed
-and scored passes the reader test. Quality over quantity.
-
-**SEC finding quality:** 3 MARGINAL, 0 YES. The SEC run was conservative
-(20% budget used, depth 2). The findings are interpretively plausible but
-not specific enough to clear the "I didn't know that" bar. The economics
-reasoning may have been too conservative for SEC data — the shallow tree
-didn't produce enough depth for the kind of cross-filing analysis that
-would produce YES findings.
-
-**Budget discipline:** npm used 46%, SEC used 20%. Both left substantial
-budget for downstream. The economics fix overcorrected from the runaway
-— managers are now defaulting to investigate/resolve rather than hiring,
-which produces shallower trees. This may need calibration for different
-corpus types — SEC's complex multi-entity filing data may need deeper
-trees than npm's simpler package metadata.
-
-## Open Questions for Review
-
-1. **SEC budget underutilization** (20% of $10) — is the economics
-   reasoning too conservative for corpora that genuinely need deeper trees?
-   The formation assessment may be treating multi-entity SEC analysis as
-   "cohesive" when it actually requires distinct analytical approaches.
-
-2. **npm 1 finding vs baseline** — the pre-Phase-F baseline produced more
-   findings (with leakage). Phase G produces fewer but the one that passes
-   is genuinely novel. Is 1 YES finding from $10 the right quality/quantity
-   tradeoff?
-
-3. **Reader test calibration** — MARGINAL may be appropriate for SEC findings
-   that have specific evidence but interpretive uncertainty. Is the bar for
-   YES correctly set, or should these SEC findings score higher?
+3. **Reader test as gate** — both runs produce 1 YES finding. Is this
+   the minimum viable quality for the architecture, or should we expect
+   more from $10?
