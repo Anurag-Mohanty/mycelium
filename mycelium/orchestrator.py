@@ -627,6 +627,9 @@ class Orchestrator:
             print("  No deep-dive targets selected.")
             return
 
+        from .worker_v2 import RoleWorkerNode
+        from .schemas import RoleDefinition
+
         for i, target in enumerate(targets, 1):
             if not self.budget.can_spend():
                 break
@@ -634,6 +637,20 @@ class Orchestrator:
             desc = target.get("investigation_directive", target.get("finding_summary", ""))
             filters = target.get("search_filters", {})
             print(f"  [DEEP-DIVE {i}] {desc[:70]}...")
+
+            # Author a role for this deep-dive from the selection context
+            dd_role = RoleDefinition(
+                name="deep-dive investigator",
+                success_bar=(
+                    f"Trace this specific finding to its full extent with named entities "
+                    f"and exact figures: {desc[:200]}"
+                ),
+                heuristic=(
+                    "This is targeted follow-up, not broad exploration. Favor depth on "
+                    "the specific thread over breadth. Do not hire unless the thread "
+                    "genuinely splits into distinct sub-investigations."
+                ),
+            )
 
             directive = Directive(
                 scope=Scope(
@@ -643,34 +660,31 @@ class Orchestrator:
                 ),
                 lenses=lenses,
                 parent_context=f"DEEP DIVE: {target.get('why_this_one', '')}. "
-                               f"This is targeted investigation — trace this finding to its full extent.",
+                               f"Trace this finding to its full extent.",
                 purpose=target.get("investigation_directive", target.get("why_this_one", "")),
                 tree_position=f"DD.{i}",
                 segment_id="deep_dive",
                 workspace_path=getattr(self, '_workspace_path', None),
+                role=dd_role,
             )
 
-            # Use WorkerNode so thinking events stream to the visualizer
-            worker = WorkerNode(
+            worker = RoleWorkerNode(
                 directive=directive,
                 data_source=self.data_source,
                 budget=min(available / len(targets), self.budget.remaining()),
                 total_budget=self.budget.total,
-                lenses=lenses,
                 semaphore=self._semaphore,
                 budget_pool=self.budget,
                 parent_pool_available=self.budget.deep_dive_available(),
                 depth=0,
                 max_depth=self._max_depth,
                 leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
-                briefing="",
             )
             worker_result = await worker.run()
 
-            # Save full worker tree — same path as exploration workers
-            self._collect_worker_stats([worker])
-            self._collect_worker_node_results([worker])
-            self._write_diagnostics([worker])
+            # Collect results from deep-dive worker tree
+            self._collect_worker_stats_v2(worker)
+            self._collect_worker_node_results_v2(worker)
             self.stats.deep_dives_executed += 1
 
             n_obs = len(worker.observations)
