@@ -477,7 +477,7 @@ async def main():
         # Reader test — score findings against charter
         try:
             from mycelium.reader_test import score_run
-            reader_scores = score_run(str(orchestrator.run_dir))
+            reader_scores = await score_run(str(orchestrator.run_dir))
             if reader_scores.get("scores"):
                 summary = reader_scores["summary"]
                 print(f"\n  Reader test: {summary['yes']} yes, {summary['marginal']} marginal, "

@@ -119,9 +119,8 @@ async def score_findings(charter: str, findings: list[dict]) -> list[dict]:
     return scores
 
 
-def score_run(run_dir: str) -> dict:
-    """Score all findings from a completed run. Sync wrapper for pipeline integration."""
-    import asyncio
+async def score_run(run_dir: str) -> dict:
+    """Score all findings from a completed run."""
     import re
     from pathlib import Path
 
@@ -178,7 +177,7 @@ def score_run(run_dir: str) -> dict:
     if not findings:
         return {"error": "no findings to score in report", "scores": []}
 
-    scores = asyncio.run(score_findings(charter, findings[:10]))  # Cap at 10 for cost
+    scores = await score_findings(charter, findings[:10])  # Cap at 10 for cost
 
     return {
         "charter_length": len(charter),
