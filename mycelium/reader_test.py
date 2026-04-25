@@ -122,6 +122,7 @@ async def score_findings(charter: str, findings: list[dict]) -> list[dict]:
 def score_run(run_dir: str) -> dict:
     """Score all findings from a completed run. Sync wrapper for pipeline integration."""
     import asyncio
+    import re
     from pathlib import Path
 
     run_path = Path(run_dir)
@@ -132,31 +133,50 @@ def score_run(run_dir: str) -> dict:
         return {"error": "no charter found", "scores": []}
     charter = charter_path.read_text()
 
-    # Load metrics to find findings
-    metrics_path = run_path / "metrics.json"
-    if not metrics_path.exists():
-        return {"error": "no metrics found", "scores": []}
+    # Extract findings from the report (Tier 3-5 sections)
+    report_path = run_path / "report.md"
+    if not report_path.exists():
+        return {"error": "no report found", "scores": []}
 
-    with open(metrics_path) as f:
-        metrics = json.load(f)
-
-    # Extract findings from the run's synthesis results
+    report = report_path.read_text()
     findings = []
 
-    # Try loading from the exploration data
-    for node_file in sorted((run_path / "nodes").glob("*.json")):
-        with open(node_file) as f:
-            node = json.load(f)
-        for obs in node.get("observations", []):
-            if isinstance(obs, dict) and obs.get("raw_evidence"):
-                findings.append({
-                    "summary": obs.get("raw_evidence", "")[:200],
-                    "evidence": obs.get("raw_evidence", ""),
-                    "validation_status": obs.get("signal_strength", "not validated"),
-                })
+    # Parse Tier 3, 4, 5 findings from report markdown
+    # Each finding starts with ### Finding N.N: or ### Pattern N.N:
+    finding_pattern = re.compile(
+        r'###\s+(?:Finding|Pattern)\s+\d+\.\d+[:\s]*(.*?)(?=\n###|\n## |\Z)',
+        re.DOTALL
+    )
+    for match in finding_pattern.finditer(report):
+        block = match.group(0)
+        # Extract title and evidence from the block
+        lines = block.strip().split('\n')
+        title = lines[0] if lines else ""
+        # Collect everything as evidence
+        evidence_lines = [l for l in lines[1:] if l.strip() and not l.startswith('**Impact')]
+        findings.append({
+            "summary": title[:300],
+            "evidence": "\n".join(evidence_lines[:15]),
+            "validation_status": "validated",
+        })
+
+    # Fallback: if no structured findings found, try broader section parsing
+    if not findings:
+        for section in ["## Tier 3", "## Tier 4", "## Tier 5"]:
+            idx = report.find(section)
+            if idx >= 0:
+                # Get content until next ## section
+                next_section = report.find("\n## ", idx + len(section))
+                section_text = report[idx:next_section] if next_section > 0 else report[idx:]
+                if len(section_text) > 50:  # has real content
+                    findings.append({
+                        "summary": section_text[:300],
+                        "evidence": section_text[:1000],
+                        "validation_status": "validated",
+                    })
 
     if not findings:
-        return {"error": "no findings to score", "scores": []}
+        return {"error": "no findings to score in report", "scores": []}
 
     scores = asyncio.run(score_findings(charter, findings[:10]))  # Cap at 10 for cost
 
