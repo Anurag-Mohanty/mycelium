@@ -1547,17 +1547,25 @@ DATA ({doc_count} items):
 
 STEP 1 — FORMATION-TIME ASSESSMENT
 
-Read your role definition. Read your scope. Read your budget. Answer one \
-question: can you do this work alone to your role's bar, or do you need \
-to hire?
+Read your role definition. Read your scope. Read your budget. Decide \
+whether to do this work yourself or hire.
 
 Think through this explicitly:
+
 - What does your bar demand? What would meeting it look like concretely \
   for the scope in front of you?
-- Is the scope narrow enough that you can cover it to your bar with the \
-  data and budget you have?
-- Or does meeting your bar require distinct kinds of work that a single \
-  pass cannot cover?
+- Does meeting your bar require genuinely distinct kinds of cognition \
+  that a single pass cannot cover? If yes, hiring is warranted.
+- If the work is cohesive — one kind of analysis across the data in \
+  front of you — do it yourself. Hiring adds real overhead: you spend \
+  budget authoring each role, briefing each hire, and reviewing their \
+  work at Turn 2. If the work itself costs less than the overhead of \
+  setting up hires to succeed, hiring is wasteful even when budget \
+  would allow it.
+- Slicing the same kind of work into smaller pieces for multiple hires \
+  is not delegation — it is fragmentation. Each hire needs a meaningfully \
+  different role, not the same role applied to a subset. If you cannot \
+  articulate what different cognition each hire brings, do it yourself.
 
 If alone: proceed to Step 2 (investigate).
 If hire: skip to Step 3 (design your team).
@@ -1608,6 +1616,13 @@ D. What scope do they get? Divide your scope into non-overlapping areas. \
 E. What budget do they get? Each hire must receive at least \
    ${leaf_viable_envelope:.2f}. Prefer fewer well-funded hires over \
    many underfunded ones.
+
+F. For each hire's heuristic, include continuation guidance. When a hire \
+   becomes a manager and faces a Turn 2 continuation decision, what should \
+   their default be? Continuation should be reserved for threads that need \
+   genuinely different cognition — not for funding more of the same kind of \
+   work on a smaller slice. Default to returning surplus so downstream \
+   phases have budget to work with.
 
 Finally, author a SYNTHESIS ROLE. After your hires return, their findings \
 will be cross-referenced and combined. The synthesis role defines what \
@@ -1819,16 +1834,33 @@ C. Classification:
 
 STEP 2 — DECIDE WHAT TO DO WITH YOUR REMAINING BUDGET
 
-Given your evaluations, what is the highest-value use of your \
-${budget_remaining:.2f}?
+You have ${budget_remaining:.2f} remaining. Downstream phases (synthesis, \
+validation, impact analysis, report) still need budget to run. Every dollar \
+you spend on continuation is a dollar those phases cannot use. Default to \
+returning surplus unless continuation is clearly the higher-value move.
+
+Before choosing CONTINUE or REHIRE, apply the economics test:
+
+- Authoring a continuation role, spawning a hire, and reviewing their work \
+  at Turn 2 costs real budget. Is the expected value of the continuation \
+  higher than the cost of setting it up?
+- Does the continuation need a genuinely different kind of cognition from \
+  what you already hired? If the thread is "more of the same kind of work \
+  on a different slice," that is not a continuation — it is the same work \
+  you could extend yourself or that your existing hires partially covered.
+- Could you address the thread yourself within your remaining envelope, \
+  without the overhead of hiring? If yes, do it yourself or note it as \
+  an unresolved thread for downstream phases.
 
 Options:
-- CONTINUE: Fund a continuation on a thread from a MET hire that \
-  flagged worthwhile follow-ups. Author a role for the continuation.
+- CONTINUE: The thread needs genuinely different cognition, the cost of \
+  setting up a hire is justified by the expected value, and the remaining \
+  budget can absorb the cost without starving downstream phases.
 - REHIRE: A POOR_REASONING or WRONG_ROLE hire left valuable territory \
-  uncovered. Author a revised role and scope for a new hire.
-- RESOLVE: All hires met their bars and no continuation is worth \
-  the remaining budget. Synthesize what you have.
+  uncovered AND the revised role is meaningfully different from the original.
+- RESOLVE: Default. Return surplus to the pool for downstream phases. \
+  Note worthwhile threads as unresolved — they may be addressed by \
+  synthesis, deep-dives, or future engagement rather than more hiring.
 
 STEP 3 — SYNTHESIZE
 
