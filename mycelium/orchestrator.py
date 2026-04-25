@@ -685,6 +685,8 @@ class Orchestrator:
             # Collect results from deep-dive worker tree
             self._collect_worker_stats_v2(worker)
             self._collect_worker_node_results_v2(worker)
+            self._write_node_files_v2(worker)
+            self._write_diagnostics_v2(worker)
             self.stats.deep_dives_executed += 1
 
             n_obs = len(worker.observations)
@@ -1482,6 +1484,8 @@ Respond ONLY with a JSON array."""}],
         self._segment_workers = [first_node]
         self._collect_worker_stats_v2(first_node)
         self._collect_worker_node_results_v2(first_node)
+        self._write_node_files_v2(first_node)
+        self._write_diagnostics_v2(first_node)
 
         # Print diagnostic summary
         print(f"\n  {'═'*54}")
@@ -1589,6 +1593,72 @@ Respond ONLY with a JSON array."""}],
             for child in worker.child_workers:
                 walk(child)
         walk(root_worker)
+
+    def _write_node_files_v2(self, root_worker):
+        """Write per-node JSON files from the role-authoring worker tree."""
+        nodes_dir = self.run_dir / "nodes"
+        nodes_dir.mkdir(exist_ok=True)
+
+        def walk(worker):
+            node_json = worker._build_node_json()
+            node_file = nodes_dir / f"{worker.node_id[:8]}.json"
+            with open(node_file, "w") as f:
+                json.dump(node_json, f, indent=2, default=str)
+            for child in worker.child_workers:
+                walk(child)
+        walk(root_worker)
+
+    def _write_diagnostics_v2(self, root_worker):
+        """Write per-node diagnostic logs from the role-authoring worker tree."""
+        diag_dir = self.run_dir / "diagnostics"
+        diag_dir.mkdir(exist_ok=True)
+
+        all_diags = []
+
+        def collect(worker):
+            diag = worker._build_diagnostic()
+            all_diags.append(diag)
+            diag_file = diag_dir / f"{worker.node_id[:8]}.json"
+            with open(diag_file, "w") as f:
+                json.dump(diag, f, indent=2, default=str)
+            for child in worker.child_workers:
+                collect(child)
+        collect(root_worker)
+
+        if not all_diags:
+            return
+
+        # Write full_diagnostic.txt
+        total = len(all_diags)
+        zero_obs = sum(1 for d in all_diags if d["output"]["observations_count"] == 0)
+        hired = sum(1 for d in all_diags if d["decision"] == "hired")
+        total_obs = sum(d["output"]["observations_count"] for d in all_diags)
+
+        full_path = self.run_dir / "full_diagnostic.txt"
+        with open(full_path, "w") as f:
+            f.write(f"{'='*70}\n")
+            f.write(f"RUN {self.run_id} — FULL NODE DIAGNOSTIC\n")
+            f.write(f"{'='*70}\n")
+            f.write(f"Nodes: {total} | Zero-obs: {zero_obs} | Hired: {hired}\n")
+            f.write(f"Total observations: {total_obs}\n\n")
+
+            for d in all_diags:
+                f.write(f"{'─'*70}\n")
+                f.write(f"NODE {d['tree_position']} [{d['decision'].upper()}] "
+                        f"${d['budget']['spent']:.3f} | Role: {d['role']}\n")
+                f.write(f"{'─'*70}\n")
+                f.write(f"BAR: {d['role_bar']}\n")
+                f.write(f"SCOPE: {d['scope']}\n")
+                f.write(f"PURPOSE: {d['purpose']}\n")
+                f.write(f"DATA: {d['data_received'].get('record_count', 0)} records\n")
+                f.write(f"OUTPUT: {d['output']['observations_count']} observations, "
+                        f"{d['output']['children_spawned']} children\n")
+                if d['output'].get('sample_observation'):
+                    sample = d['output']['sample_observation']
+                    f.write(f"  SAMPLE: {str(sample.get('raw_evidence', ''))[:150]}\n")
+                if d.get('thinking_summary'):
+                    f.write(f"THINKING (first 500): {d['thinking_summary'][:500]}\n")
+                f.write("\n")
 
     async def _aggregate_anomalies(self, all_anomalies: dict) -> tuple[list[dict], str]:
         """Aggregate anomalies into pattern clusters via one LLM call.

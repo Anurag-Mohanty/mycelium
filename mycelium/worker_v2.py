@@ -577,6 +577,60 @@ class RoleWorkerNode:
                 parsed.append(obs_data)
         return parsed
 
+    def _build_diagnostic(self) -> dict:
+        """Build diagnostic data for this node — compatible with orchestrator diagnostics."""
+        obs_list = self.observations
+        sample_obs = obs_list[0] if obs_list else {}
+
+        return {
+            "node_id": self.node_id,
+            "tree_position": self.pos,
+            "role": self._role.name,
+            "role_bar": self._role.success_bar[:200],
+            "scope": self.directive.scope.description[:200],
+            "purpose": self.directive.purpose[:200],
+            "data_received": self._diagnostics.get("data_received", {"record_count": 0}),
+            "anomaly_targets_received": self._diagnostics.get("anomaly_targets_received", {"count": 0, "targets": []}),
+            "thinking_summary": self.thinking_log[0]["thinking"][:2000] if self.thinking_log else "",
+            "output": {
+                "observations_count": len(obs_list),
+                "children_spawned": len(self.child_workers),
+                "evidence_cited": sum(1 for o in obs_list if isinstance(o, dict) and o.get("raw_evidence")),
+                "sample_observation": sample_obs if isinstance(sample_obs, dict) else {},
+            },
+            "self_evaluation": self.metrics if isinstance(self.metrics, dict) else {},
+            "budget": {
+                "envelope": self.budget,
+                "spent": self.spent,
+                "surplus": self.surplus,
+                "depth": self.depth,
+                "max_depth": self.max_depth,
+            },
+            "decision": "hired" if self.child_workers else "investigated",
+            "decision_reasoning": "",
+        }
+
+    def _build_node_json(self) -> dict:
+        """Build node output JSON — written to nodes/ directory."""
+        return {
+            "node_id": self.node_id,
+            "parent_id": self.directive.parent_id,
+            "scope_description": self.directive.scope.description[:200],
+            "tree_position": self.pos,
+            "role": self._role.name,
+            "role_bar": self._role.success_bar[:200],
+            "observations": self.observations,
+            "child_directives_count": len(self.child_workers),
+            "unresolved": [],
+            "raw_reasoning": "",
+            "thinking": self.thinking_log[0]["thinking"] if self.thinking_log else "",
+            "thinking_log": self.thinking_log,
+            "turn2_review": self.thinking_log[1]["thinking"] if len(self.thinking_log) > 1 else "",
+            "metrics": self.metrics,
+            "token_usage": self.token_usage,
+            "cost": self.spent,
+        }
+
     def _result(self) -> dict:
         """Package results for parent."""
         # Collect all observations from children recursively
