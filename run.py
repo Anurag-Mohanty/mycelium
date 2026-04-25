@@ -474,6 +474,26 @@ async def main():
             f.write(report)
         print(f"\n  Report saved to {report_path}")
 
+        # Reader test — score findings against charter
+        try:
+            from mycelium.reader_test import score_run
+            reader_scores = score_run(str(orchestrator.run_dir))
+            if reader_scores.get("scores"):
+                summary = reader_scores["summary"]
+                print(f"\n  Reader test: {summary['yes']} yes, {summary['marginal']} marginal, "
+                      f"{summary['no']} no (${reader_scores['total_cost']:.3f})")
+                # Append to metrics
+                metrics_path = Path(orchestrator.run_dir) / "metrics.json"
+                if metrics_path.exists():
+                    import json as _json
+                    with open(metrics_path) as f:
+                        metrics = _json.load(f)
+                    metrics["reader_test"] = reader_scores
+                    with open(metrics_path, "w") as f:
+                        _json.dump(metrics, f, indent=2, default=str)
+        except Exception as e:
+            print(f"\n  Reader test skipped: {e}")
+
         # Save comparison prompt
         comparison_path = Path(orchestrator.run_dir) / "comparison_prompt.md"
         with open(comparison_path, "w") as f:

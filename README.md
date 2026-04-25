@@ -166,10 +166,11 @@ mycelium/
   orchestrator.py      # Full pipeline coordinator + run metrics + envelope enforcement
   worker.py            # WorkerNode — persistent multi-turn agent with envelope caps
   node.py              # Single-call reasoning primitive (legacy)
-  genesis.py           # Phase F: organizational charter generation (CEO directive voice)
+  genesis.py           # Organizational charter generation (CEO directive voice)
   briefer.py           # Common knowledge briefing for novelty calibration
-  planner.py           # Phase F: operational plan from charter (rules + scopes + budget)
-  workspace.py         # Phase F: filesystem workspace (charter, rules, scopes)
+  workspace.py         # Filesystem workspace (charter shared with all workers)
+  worker_v2.py         # RoleWorkerNode — role-authoring path with formation assessment
+  reader_test.py       # Reader test scorer — per-finding quality gate against charter
   survey.py            # AnalyticalSurvey (10 techniques, sklearn/pandas)
   synthesizer.py       # Cross-reference sibling observations
   validator.py         # Two-layer skeptical review (factual + interpretive)

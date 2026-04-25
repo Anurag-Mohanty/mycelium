@@ -8,7 +8,7 @@ standards, and stakes for the entire investigation.
 import json
 import random
 import anthropic
-from .prompts import CHARTER_PROMPT
+from . import prompts as _prompts
 
 
 async def run_genesis(data_source, hints: list[str] = None,
@@ -74,7 +74,7 @@ async def run_genesis(data_source, hints: list[str] = None,
         briefing_text = "(No existing briefing available — use survey findings as proxy for common knowledge.)"
 
     import datetime
-    prompt = CHARTER_PROMPT.format(
+    prompt = _prompts.CHARTER_PROMPT.format(
         current_date=datetime.date.today().isoformat(),
         corpus_metadata=corpus_metadata,
         survey_findings=survey_findings_str,

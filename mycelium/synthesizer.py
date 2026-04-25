@@ -11,11 +11,13 @@ This is where discoveries emerge that no single node could have found alone.
 import json
 import anthropic
 from .schemas import NodeResult, SynthesisResult
-from .prompts import SYNTHESIS_PROMPT, SYNTHESIS_LIGHT_PROMPT
+from . import prompts as _prompts
 
 
 async def synthesize(parent_result: NodeResult, children_results: list[NodeResult],
-                     lenses: list[str], light: bool = False) -> SynthesisResult:
+                     lenses: list[str], light: bool = False,
+                     synthesis_role: dict = None,
+                     workspace_context: str = "") -> SynthesisResult:
     """Cross-reference observations from sibling nodes to find emergent patterns.
 
     Args:
@@ -41,11 +43,21 @@ async def synthesize(parent_result: NodeResult, children_results: list[NodeResul
     reports = _format_investigator_reports(children_results)
     lenses_str = ", ".join(lenses)
 
-    template = SYNTHESIS_LIGHT_PROMPT if light else SYNTHESIS_PROMPT
-    prompt = template.format(
-        investigator_reports=reports,
-        lenses=lenses_str,
-    )
+    # Use role-anchored synthesis if a synthesis role was authored
+    if synthesis_role and synthesis_role.get("success_bar"):
+        prompt = _prompts.SYNTHESIS_PROMPT_V2.format(
+            role_name=synthesis_role.get("name", "synthesis"),
+            role_bar=synthesis_role.get("success_bar", ""),
+            role_heuristic=synthesis_role.get("heuristic", ""),
+            workspace_context=workspace_context,
+            investigator_reports=reports,
+        )
+    else:
+        template = _prompts.SYNTHESIS_LIGHT_PROMPT if light else _prompts.SYNTHESIS_PROMPT
+        prompt = template.format(
+            investigator_reports=reports,
+            lenses=lenses_str,
+        )
 
     # Run synthesis — light uses fewer tokens
     client = anthropic.Anthropic()

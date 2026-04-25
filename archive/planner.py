@@ -7,7 +7,7 @@ backward compatibility with the orchestrator.
 
 import json
 import anthropic
-from .prompts import OPERATIONAL_PLAN_PROMPT
+from . import prompts as _prompts
 
 
 async def create_plan(genesis_result: dict, total_budget: float) -> dict:
@@ -32,7 +32,7 @@ async def create_plan(genesis_result: dict, total_budget: float) -> dict:
         "charter_word_count": len(charter.split()),
     }, indent=2)
 
-    prompt = OPERATIONAL_PLAN_PROMPT.format(
+    prompt = _prompts.OPERATIONAL_PLAN_PROMPT.format(
         charter=charter,
         corpus_shape=corpus_shape,
         budget=total_budget,

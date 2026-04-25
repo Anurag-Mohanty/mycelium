@@ -442,27 +442,38 @@ structures) → decompose into those distinct areas.
 Never create a single child. If you can't identify at least 2 distinct threads, \
 resolve directly.
 
---- CHARTER COMPLIANCE CHECK ---
+--- BEFORE YOU EMIT: SURFACE AND COMMIT ---
 
-Before producing output, re-read the ORGANIZATIONAL CHARTER above (if present). \
-For EACH observation you are about to report, ask:
+You have drafted observations in your head. Before any observation goes into \
+your output, you must walk it through two steps out loud in your thinking. \
+Do this for every observation you are considering emitting. No exceptions.
 
-1. Does the charter's "What Is Already Known" section already describe this? \
-   If yes: SUPPRESS the observation entirely. Do not include it. The charter \
-   exists precisely so you don't waste time reporting known patterns.
+SURFACE: Name every tension you noticed about this observation during your \
+reasoning. Tensions are things that gave you pause — anything where what you \
+are about to report sits uncomfortably against your directive, your evidence, \
+or your own assessment. Examples of tensions (not a checklist — yours come \
+from your own reasoning, not from this list): the observation matches a \
+category your directive told you not to report; a value you are relying on \
+is contradicted by other values in the same record; the observation could be \
+written without having looked at the data; your framing adds analytical \
+language to a pattern you already identified as known. If no tensions emerged \
+during your reasoning, say "no tensions" and proceed.
 
-2. Would the charter's leadership say "obvious" about this? If the charter \
-   gives examples of unimpressive findings and yours matches one, suppress it.
+COMMIT: For each tension you surfaced, state on the record what you are \
+doing about it and why. This is a commitment, not a reflection. You are \
+binding yourself to an action: drop this observation, revise it to resolve \
+the tension, or keep it with an explicit statement of why the tension does \
+not invalidate it. "I noticed this tension but I am proceeding anyway" is \
+not a commitment — it is the absence of one. If you cannot articulate a \
+specific reason why the tension does not matter, the observation does not \
+survive.
 
-3. Does the observation meet the charter's specificity standard? If the charter \
-   demands named entities and exact numbers, a vague pattern observation fails.
+The test: after your commit, would you defend this observation to the person \
+who wrote your directive? If they read your tension and your commitment and \
+said "you noticed the problem and emitted anyway" — would your commitment \
+hold, or would it crumble?
 
-If an observation is RELATED to a known pattern but reveals something the \
-charter doesn't cover, REFRAME it: instead of "lodash has 1 maintainer" \
-(known), report "lodash's 580M downloads flow through a dependency chain \
-where packages X, Y, Z create an unmapped chokepoint" (novel).
-
-Only observations that PASS this check should appear in your output.
+Only observations that survive surface-and-commit go into your output.
 
 --- WHEN RESOLVING ---
 
@@ -1326,12 +1337,20 @@ access to the complete dependency graph of the modern software ecosystem — \
 every package, every maintainer, every version. Our job is to find what \
 nobody else has noticed."
 
-2. WHAT IS ALREADY KNOWN. Incorporate the briefing content. Tell your team \
-what's common knowledge so they don't waste time rediscovering it. Be specific \
-— name entities, cite numbers. "Everyone knows lodash is maintained by one \
-person. Don't bring me that. Bring me what's BEHIND that — why the ecosystem \
-tolerates it, what it implies for packages that depend on lodash, where the \
-actual risk concentrates."
+2. WHAT IS ALREADY KNOWN. Incorporate the briefing content. Structure this as \
+a list of CATEGORIES of known patterns, with specific examples illustrating each. \
+Workers will check their findings against these categories — if a finding matches \
+the SHAPE of a known category (even with different specific entities), it's not novel. \
+\
+Format: state the category first, then give one or two concrete examples. \
+Example: "Single-maintainer concentration in critical packages (lodash/jdalton, \
+axios/jasonsaayman)" — the category is "single-maintainer concentration in \
+critical packages." A worker finding that express has one maintainer matches \
+this category and should be suppressed, even though express wasn't named. \
+\
+The goal is NOT to enumerate every known entity. It's to name the SHAPES of \
+knowledge so workers can recognize when their finding is a new instance of a \
+known shape versus a genuinely new shape.
 
 3. WHAT IMPRESSES US AND WHAT DOESN'T. Define the quality bar. What kind of \
 finding would make leadership say "we didn't know that"? What kind would make \
@@ -1475,6 +1494,400 @@ Return JSON:
         "reasoning": "why this split"
     }},
     "depth_policy": "summary of depth guidance from rules"
+}}
+
+Respond ONLY with valid JSON, no other text.
+"""
+
+
+# --- Role-Authoring Path Prompt ---
+
+NODE_REASONING_PROMPT_V2 = """\
+Today's date is {current_date}.
+
+YOUR ROLE:
+Name: {role_name}
+Bar: {role_bar}
+Heuristic: {role_heuristic}
+
+YOUR SCOPE:
+{scope_description}
+
+YOUR PURPOSE (why you were hired):
+{purpose}
+
+CONTEXT FROM YOUR MANAGER (if any):
+{parent_context}
+
+{workspace_context}
+
+DATA SOURCE FILTER SCHEMA:
+{filter_schema}
+
+When creating hire directives, use ONLY the filter parameter names listed \
+above with values that will match actual records you saw in your data.
+
+BUDGET:
+Allocated: ${budget_remaining:.2f}
+Parent pool: ~${parent_pool_remaining:.2f}
+Phase remaining: ~${phase_remaining:.2f}
+{segment_context}
+Depth: {current_depth} (max {max_depth})
+Minimum hire envelope: ${leaf_viable_envelope:.2f}
+
+{depth_guidance}
+{budget_stage}
+
+DATA ({doc_count} items):
+{fetched_data}
+
+{force_resolve}
+
+---
+
+STEP 1 — FORMATION-TIME ASSESSMENT
+
+Read your role definition. Read your scope. Read your budget. Answer one \
+question: can you do this work alone to your role's bar, or do you need \
+to hire?
+
+Think through this explicitly:
+- What does your bar demand? What would meeting it look like concretely \
+  for the scope in front of you?
+- Is the scope narrow enough that you can cover it to your bar with the \
+  data and budget you have?
+- Or does meeting your bar require distinct kinds of work that a single \
+  pass cannot cover?
+
+If alone: proceed to Step 2 (investigate).
+If hire: skip to Step 3 (design your team).
+
+STEP 2 — INVESTIGATE (only if working alone)
+
+Survey what is in front of you. Read the data. Form impressions. \
+Develop hypotheses from what you observe, not from prior expectations.
+
+For each item you are considering reporting, hold it against your role's \
+bar before anything else. Your bar is closer to the work than the charter \
+is. Ask: "Does this meet the bar I was hired to clear?" If not, it does \
+not go in your output regardless of how interesting it is.
+
+If the charter is present in your workspace context, check the output \
+against the charter's standards as well. The bar fires first; the charter \
+fires second.
+
+For any value you rely on: do the other fields in the same record \
+corroborate it or contradict it? If contradicted, you do not trust \
+that value. Do not build output on evidence you do not trust.
+
+Proceed to Step 4 (output).
+
+STEP 3 — DESIGN YOUR TEAM (only if hiring)
+
+You have decided you cannot do this work alone. You are now a manager. \
+Your job shifts from investigating to organizing.
+
+For each hire you need:
+
+A. What role do they play? Give it a name that captures the kind of \
+   cognition they bring to this work, not just a topic label.
+
+B. What is their bar? Be specific enough that when they return, you can \
+   look at their output and judge whether they met it. Vague bars \
+   produce vague work. "Find interesting things" is not a bar. \
+   "Identify specific instances where X contradicts Y, with named \
+   entities and exact figures" is a bar.
+
+C. What is their heuristic? When they face an ambiguous decision during \
+   their work, what posture should they take? This is guidance for the \
+   moments their bar doesn't cover.
+
+D. What scope do they get? Divide your scope into non-overlapping areas. \
+   Each hire gets a distinct piece of the work.
+
+E. What budget do they get? Each hire must receive at least \
+   ${leaf_viable_envelope:.2f}. Prefer fewer well-funded hires over \
+   many underfunded ones.
+
+Finally, author a SYNTHESIS ROLE. After your hires return, their findings \
+will be cross-referenced and combined. The synthesis role defines what \
+good cross-referencing looks like for this engagement. Same structure: \
+name, bar, heuristic. The bar should specify what cross-cutting patterns \
+are worth surfacing versus what is just restating individual findings.
+
+Proceed to Step 4 (output).
+
+STEP 4 — OUTPUT
+
+If you investigated (Step 2), produce your findings. \
+If you hired (Step 3), produce your team design.
+
+Return JSON:
+{{
+    "formation_assessment": {{
+        "decision": "investigate | hire",
+        "reasoning": "why you made this decision — reference your bar, scope, and budget"
+    }},
+    "observations": [
+        {{
+            "raw_evidence": "specific data from the records — actual values, not summaries",
+            "statistical_grounding": "what flagged this, or 'discovered during investigation'",
+            "local_hypothesis": "specific explanation",
+            "source": {{
+                "doc_id": "identifier",
+                "title": "name",
+                "agency": "author or source entity",
+                "date": "date",
+                "section": "section if applicable",
+                "url": "URL if available"
+            }},
+            "observation_type": "type",
+            "confidence": 0.85,
+            "confidence_rationale": "why this confidence — name uncertainties",
+            "signal_strength": "data_originated_novel | data_originated_confirmatory | confirmatory",
+            "surprising_because": "expected vs actual"
+        }}
+    ],
+    "hire_directives": [
+        {{
+            "role": {{
+                "name": "role name — kind of cognition, not topic label",
+                "success_bar": "what good output looks like for this role — specific, judgeable",
+                "heuristic": "posture for ambiguous moments"
+            }},
+            "scope_description": "what this hire investigates — non-overlapping with siblings",
+            "purpose": "why this hire is needed and what you need from them",
+            "data_filter": {{}},
+            "parent_context": "the evidence or reasoning that motivated this hire",
+            "budget": 0.00
+        }}
+    ],
+    "synthesis_role": {{
+        "name": "synthesis role name",
+        "success_bar": "what good cross-referencing looks like — what patterns to surface, what to filter",
+        "heuristic": "posture for ambiguous moments in synthesis"
+    }},
+    "self_evaluation": {{
+        "purpose_addressed": true,
+        "purpose_gap": "what was missing if purpose not fully addressed",
+        "evidence_quality": "high | medium | low",
+        "bar_met": true,
+        "bar_gap": "if bar not met, what fell short",
+        "worthwhile_followup_threads": [
+            {{
+                "what_to_investigate": "specific thread",
+                "question_it_answers": "what this would resolve"
+            }}
+        ],
+        "capability_gaps": ["what was needed but unavailable"],
+        "adjacent_findings": ["observations outside assigned scope"]
+    }},
+    "unresolved": ["things noticed but not investigated"]
+}}
+
+RULES:
+- If you investigated: observations must be non-empty, hire_directives empty.
+- If you hired: hire_directives must be non-empty, observations empty.
+- Every observation must cite specific data with identifiers.
+- Every hire must have a concrete bar, not a vague one.
+- Never create exactly one hire. Either investigate alone or hire 2+.
+- Each hire must receive at least ${leaf_viable_envelope:.2f}.
+
+Respond ONLY with valid JSON, no other text.
+"""
+
+
+# Appended to NODE_REASONING_PROMPT_V2 when chain circuit breaker fires
+NODE_FORCE_RESOLVE_OVERRIDE_V2 = """\
+OVERRIDE: You are deep in a single-hire chain ({chain_depth} levels). \
+You MUST investigate directly. Do not hire. Set hire_directives to empty. \
+Produce observations from the data in front of you.
+"""
+
+
+SYNTHESIS_PROMPT_V2 = """\
+You are synthesizing findings from multiple investigators.
+
+YOUR ROLE:
+Name: {role_name}
+Bar: {role_bar}
+Heuristic: {role_heuristic}
+
+{workspace_context}
+
+INVESTIGATOR REPORTS:
+{investigator_reports}
+
+---
+
+Your job is to cross-reference findings from all investigators. Hold every \
+synthesis decision against your role's bar before anything else.
+
+1. Read all observations from all investigators.
+
+2. Cross-reference: For each observation, check if any other investigator's \
+   observation makes it more significant. Look for contradictions (different \
+   sources saying different things), reinforcements (independent evidence of \
+   the same pattern), and connections (linking previously unrelated findings).
+
+3. Filter against your bar: only patterns that clear YOUR bar go into \
+   your output. If a pattern is interesting but your bar says it's not \
+   the kind of cross-cutting insight this engagement needs, leave it out.
+
+4. For any value you rely on: do the other fields in the records \
+   corroborate it or contradict it? Do not build synthesis findings on \
+   evidence you do not trust.
+
+Return JSON:
+{{
+    "reinforced": [
+        {{
+            "pattern": "description of the reinforced pattern",
+            "observations": ["obs summary 1", "obs summary 2"],
+            "sources": ["source_id_1", "source_id_2"],
+            "confidence": 0.0
+        }}
+    ],
+    "contradictions": [
+        {{
+            "what_conflicts": "description",
+            "side_a": {{"observation": "specific data", "source": "source_id"}},
+            "side_b": {{"observation": "specific data", "source": "source_id"}},
+            "significance": "why this matters"
+        }}
+    ],
+    "cross_cutting_patterns": [
+        {{
+            "pattern": "description",
+            "evidence_chain": [{{"claim": "specific claim", "source": "source_id"}}],
+            "confidence": 0.0,
+            "inferred_links": ["any links that are inference, not data"]
+        }}
+    ],
+    "discovered_questions": ["questions that emerged from cross-referencing"],
+    "unresolved_threads": ["things that need more investigation"]
+}}
+
+Respond ONLY with valid JSON, no other text.
+"""
+
+
+MANAGER_TURN2_PROMPT_V2 = """\
+Your hires have returned. You have ${budget_remaining:.2f} available.
+
+YOUR ROLE:
+Name: {role_name}
+Bar: {role_bar}
+
+YOUR ORIGINAL SCOPE:
+{scope_description}
+
+{workspace_context}
+
+For each hire below, you will see:
+- The role definition YOU authored for them (name, bar, heuristic)
+- Their output (observations and self-evaluation)
+
+HIRE REPORTS:
+{hire_reports}
+
+---
+
+STEP 1 — EVALUATE EACH HIRE AGAINST THEIR AUTHORED BAR
+
+For each hire, read the bar you wrote for them. Then read their output. \
+Answer three questions:
+
+A. Did they meet the bar? Look at what you defined as success for this \
+   role. Compare their actual output against it. Be specific — quote \
+   the bar, then state what in their output satisfies or falls short.
+
+B. If they did not meet the bar, why?
+   - Did they reason poorly? The bar was right, but the hire failed \
+     to clear it. Their output is weak, off-target, or superficial \
+     relative to what the bar demanded.
+   - Did you author the wrong bar? Looking at what the hire actually \
+     encountered, the bar you wrote was misaligned with the work. The \
+     hire did reasonable work; the bar didn't match the territory.
+
+C. Classification:
+   - MET: Output clears the bar. Integrate findings into your synthesis.
+   - POOR_REASONING: Bar was right, hire fell short. Consider rebriefing \
+     or hiring differently if continuation budget allows.
+   - WRONG_ROLE: Bar was misaligned. Revise the role definition for any \
+     continuation on this thread.
+
+STEP 2 — DECIDE WHAT TO DO WITH YOUR REMAINING BUDGET
+
+Given your evaluations, what is the highest-value use of your \
+${budget_remaining:.2f}?
+
+Options:
+- CONTINUE: Fund a continuation on a thread from a MET hire that \
+  flagged worthwhile follow-ups. Author a role for the continuation.
+- REHIRE: A POOR_REASONING or WRONG_ROLE hire left valuable territory \
+  uncovered. Author a revised role and scope for a new hire.
+- RESOLVE: All hires met their bars and no continuation is worth \
+  the remaining budget. Synthesize what you have.
+
+STEP 3 — SYNTHESIZE
+
+Combine your own observations (if any) with your hires' met-the-bar \
+findings. Filter: only findings that would clear YOUR bar go into \
+your output. If a hire produced work that met their bar but doesn't \
+clear your bar, note it but do not include it as a finding.
+
+Return JSON:
+{{
+    "hire_evaluations": [
+        {{
+            "hire_role_name": "the role name you authored",
+            "bar_quoted": "the bar you wrote for this role",
+            "bar_met": true,
+            "classification": "MET | POOR_REASONING | WRONG_ROLE",
+            "reasoning": "specific comparison of output against bar",
+            "key_findings_to_integrate": ["findings that passed the bar"],
+            "worthwhile_threads": ["threads worth continuing"]
+        }}
+    ],
+    "continuation_decision": {{
+        "action": "CONTINUE | REHIRE | RESOLVE",
+        "reasoning": "why this action",
+        "continuation_directives": [
+            {{
+                "role": {{
+                    "name": "role for continuation hire",
+                    "success_bar": "bar for continuation",
+                    "heuristic": "heuristic for continuation"
+                }},
+                "scope_description": "what to investigate",
+                "purpose": "why this continuation",
+                "data_filter": {{}},
+                "parent_context": "evidence motivating this",
+                "budget": 0.00
+            }}
+        ]
+    }},
+    "synthesized_findings": [
+        {{
+            "type": "the kind of finding",
+            "summary": "what was found",
+            "evidence": ["from which hires"],
+            "confidence": 0.8
+        }}
+    ],
+    "observations": [
+        {{
+            "raw_evidence": "specific data",
+            "statistical_grounding": "what flagged this",
+            "local_hypothesis": "explanation",
+            "source": {{"doc_id": "", "title": "", "agency": "", "date": "", "section": "", "url": ""}},
+            "observation_type": "type",
+            "confidence": 0.8,
+            "signal_strength": "data_originated_novel | data_originated_confirmatory | confirmatory",
+            "surprising_because": "expected vs actual"
+        }}
+    ]
 }}
 
 Respond ONLY with valid JSON, no other text.

@@ -43,6 +43,18 @@ class Briefing:
 # --- Core exploration structures ---
 
 @dataclass
+class RoleDefinition:
+    """What a node is, not just what it does.
+
+    Authored by the hiring manager at spawn time. The role's bar is
+    the primary judgment criterion — closer to the work than the charter.
+    """
+    name: str = ""              # what this role is called
+    success_bar: str = ""       # what good output specifically looks like
+    heuristic: str = ""         # posture for ambiguous moments
+
+
+@dataclass
 class Scope:
     """Defines the boundaries of what a node should explore."""
     source: str
@@ -66,6 +78,7 @@ class Directive:
     survey_anomalies: list = field(default_factory=list)  # statistical anomalies relevant to this scope
     workspace_path: Optional[str] = None  # path to org-level workspace directory
     scope_level: str = "ambiguous"  # manager | worker | ambiguous
+    role: Optional[RoleDefinition] = None  # role-authoring path only
 
 
 @dataclass

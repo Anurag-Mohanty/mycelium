@@ -26,7 +26,6 @@ from .schemas import (
 )
 from .genesis import run_genesis
 from .briefer import generate_briefing
-from .planner import create_plan
 from .survey import ProgrammaticSurvey
 from .node import run_node
 
@@ -337,241 +336,43 @@ class Orchestrator:
             print("  [GENESIS] ERROR: No charter generated. Aborting.")
             return self._build_exploration_data()
 
-        # --- Phase 1: Planner (produces operational plan from charter) ---
-        print(f"\n  [PLANNER] Creating operational plan from charter...")
-        self.plan = await create_plan(self.genesis_result, self.budget.total)
-        self.budget.record("overhead", self.plan.get("cost", 0))
-        self._update_tokens(self.plan.get("token_usage", {}))
-
-        segments = self.plan.get("segments", [])
-        seg_targets = {s["name"]: s.get("sub_budget", 0) for s in segments}
-        self.budget.set_segment_targets(seg_targets)
-        self._planned_nodes = self.plan.get("estimated_total_nodes", 0)
-
-        # Print Phase F scope layout
-        print(f"  [PLANNER] Plan: {len(segments)} scopes, "
-              f"~{self._planned_nodes or '?'} estimated nodes")
-        for seg in segments:
-            level = seg.get('scope_level', '?')
-            print(f"  ├── {seg['name']:25s} ${seg.get('sub_budget', 0):.2f} [{level}]")
-
-        budget_alloc = self.plan.get("budget_allocation", {})
-        if budget_alloc:
-            print(f"  [PLANNER] Budget allocation (ceilings):")
-            for k, v in budget_alloc.items():
-                if k != "reasoning" and isinstance(v, (int, float)):
-                    print(f"    {k}: ${v:.2f}")
-
-        rules = self.plan.get("rules_of_engagement", "")
-        if rules:
-            print(f"  [PLANNER] Rules of engagement: {len(rules)} chars")
-
-        # Emit planner reasoning for visualizer
-        events.emit("planner_reasoning", {
-            "segment_count": len(segments),
-            "estimated_nodes": self._planned_nodes,
-            "segments": [
-                {"name": s["name"], "budget": s.get("sub_budget", 0),
-                 "nodes": s.get("estimated_nodes", 0),
-                 "reasoning": s.get("reasoning", ""),
-                 "scope_level": s.get("scope_level", "ambiguous")}
-                for s in segments
-            ],
-            "deep_dive_reserve": 0,
-            "deep_dive_strategy": "Deep investigation within manager subtrees",
-        })
-
-        # --- Create org-level workspace ---
+        # --- Create org-level workspace (charter only — first node produces org structure) ---
         from .workspace import OrgWorkspace
         workspace_dir = self.run_dir / "workspace"
         self._workspace = OrgWorkspace(workspace_dir)
         self._workspace.write_charter(charter)
-        self._workspace.write_rules(rules)
-        self._workspace.write_scopes(
-            self.plan.get("initial_scopes", []),
-            budget_alloc,
-        )
         print(f"  [WORKSPACE] Org workspace created at {workspace_dir}")
         self._workspace_path = str(workspace_dir)
 
-        # --- Phase F exploration envelope from budget allocation ---
-        inv_total = budget_alloc.get("investigation_total", self.budget.total * 0.50)
-        exploration_pct = inv_total / self.budget.total if self.budget.total > 0 else 0.50
-        # Phase F: downstream allocations are ceilings. Set exploration limit
-        # generously — actual downstream spending is far lower than allocations.
-        effective_pct = max(0.40, min(0.85, exploration_pct + 0.20))  # add headroom for ceiling slack
-        self.budget.phase_limits["exploration"] = effective_pct
+        # Exploration limit — budget is the real constraint
+        self.budget.phase_limits["exploration"] = 0.85
         self._planner_envelope = {
-            "exploration_envelope_pct": round(effective_pct, 3),
-            "exploration_envelope_dollars": round(self.budget.total * effective_pct, 2),
-            "reasoning": f"Phase F: investigation {exploration_pct:.0%} + 20% ceiling headroom",
-            "raw_pct": round(exploration_pct, 3),
-            "clamped": False,
+            "exploration_envelope_pct": 0.85,
+            "exploration_envelope_dollars": round(self.budget.total * 0.85, 2),
+            "reasoning": "Role-authoring path: 85% exploration, downstream phases are ceilings",
         }
-        print(f"  [PLANNER] Effective exploration limit: {effective_pct:.0%} = "
-              f"${self.budget.total * effective_pct:.2f} (ceilings release unused budget)")
-
-        # Phase F relaxes depth — budget is the real constraint, not depth caps
         self._max_depth = 6  # permissive upper bound (safety circuit)
         self._planner_envelope["max_decomposition_depth"] = self._max_depth
         self._planner_envelope["leaf_viable_envelope"] = LEAF_VIABLE_ENVELOPE
-        print(f"  [PLANNER] Max depth: {self._max_depth} (budget-governed, not capped)")
 
-        # --- Phase 2: Exploration ---
+        # --- Phase 1: Exploration (role-authoring path) ---
         print(f"\n  {'─'*54}")
         print(f"  PHASE 1: EXPLORATION")
         events.emit("phase_change", {"phase": "exploration"})
         print(f"  {'─'*54}\n")
 
-        # Create WorkerNode agents for each segment
-        exploration_budget = self.budget.total * self.budget.phase_limits["exploration"]
-        segment_budget_each = exploration_budget / max(1, len(segments))
+        await self._run_role_authoring_exploration(charter, [], lenses)
 
-        segment_workers = []
-        self._segment_workers = segment_workers  # save ref for metrics
-        all_anomalies = getattr(self, '_survey_anomalies', {})
-
-        # Phase 1: Aggregate anomalies into pattern summary (one LLM call)
-        # Phase 2: Route patterns to segments (one cheap LLM call per segment)
-        print(f"\n  Aggregating anomalies into patterns...")
-        flat_anomalies, pattern_summary = await self._aggregate_anomalies(all_anomalies)
-
-        print(f"  Routing patterns to {len(segments)} segments (LLM reasoning)...")
-        routing_tasks = [
-            self._route_patterns_to_segment(pattern_summary, flat_anomalies, seg)
-            for seg in segments
-        ]
-        routed_results = await asyncio.gather(*routing_tasks, return_exceptions=True)
-
-        anomaly_type_counts = {}
-        for i, (seg, routed) in enumerate(zip(segments, routed_results), 1):
-            # Handle routing failures
-            if isinstance(routed, Exception):
-                print(f"    ⚠ Segment {i} routing error: {routed}")
-                seg_anomalies = []
-            else:
-                seg_anomalies = routed
-
-            seg_name = seg.get("name", f"seg_{i}")[:30]
-            print(f"    Segment {i} ({seg_name}): {len(seg_anomalies)} targets routed")
-
-            for a in seg_anomalies:
-                t = a.get("type", "unknown")
-                anomaly_type_counts[t] = anomaly_type_counts.get(t, 0) + 1
-
-            anomaly_summary = ""
-            if seg_anomalies:
-                anomaly_summary = f" Survey flagged {len(seg_anomalies)} anomalies in this scope."
-            purpose = (
-                f"{seg.get('reasoning', 'Investigate this segment.')}"
-                f"{anomaly_summary}"
-            )
-
-            directive = Directive(
-                scope=Scope(
-                    source=self.data_source.__class__.__name__,
-                    filters=seg.get("filters", {"keyword": seg["name"]}),
-                    description=seg.get("scope_description", seg["name"]),
-                ),
-                lenses=lenses,
-                parent_context=f"Planner assigned this scope: {seg.get('reasoning', '')}",
-                purpose=purpose,
-                tree_position=str(i),
-                segment_id=seg["name"],
-                survey_anomalies=seg_anomalies,
-                workspace_path=self._workspace_path,
-                scope_level=seg.get("scope_level", "ambiguous"),
-            )
-            worker = WorkerNode(
-                directive=directive,
-                data_source=self.data_source,
-                budget=seg.get("sub_budget", segment_budget_each),
-                total_budget=self.budget.total,
-                lenses=lenses,
-                semaphore=self._semaphore,
-                budget_pool=self.budget,
-                parent_pool_available=self.budget.exploration_remaining(),
-                depth=0,
-                max_depth=self._max_depth,
-                leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
-                briefing="",  # Phase F uses workspace instead
-            )
-            segment_workers.append(worker)
-
-        # Print anomaly flow diagnostic
-        if anomaly_type_counts:
-            print(f"\n  Anomalies passed to segments:")
-            for t, c in sorted(anomaly_type_counts.items(), key=lambda x: -x[1]):
-                has_ev = sum(1 for w in segment_workers
-                             for a in w.directive.survey_anomalies
-                             if a.get("type") == t and a.get("evidence"))
-                print(f"    {t}: {c} ({has_ev} with evidence)")
-
-        # Run all segment workers in parallel
-        segment_results = list(await asyncio.gather(
-            *[w.run() for w in segment_workers],
-            return_exceptions=True,
-        ))
-        segment_results = [r for r in segment_results if isinstance(r, dict)]
-
-        # Workers record spending directly to the budget pool now.
-        # No post-hoc recording needed.
-
-        # Collect stats, diagnostics, and populate all_node_results from worker tree
-        self._collect_worker_stats(segment_workers)
-        self._collect_worker_node_results(segment_workers)
-        self._write_diagnostics(segment_workers)
-
-        # Deduplication check — how many observations cover the same pattern?
-        obs_fingerprints = {}
-        for nr in self.all_node_results:
-            for obs in nr.observations:
-                # Fingerprint by first 50 chars of evidence + source doc_id
-                fp = (obs.raw_evidence[:50].lower(), obs.source.doc_id)
-                if fp not in obs_fingerprints:
-                    obs_fingerprints[fp] = []
-                obs_fingerprints[fp].append(nr.node_id)
-        dupes = {fp: nodes for fp, nodes in obs_fingerprints.items() if len(nodes) > 1}
-        if dupes:
-            print(f"\n  Duplicate observations: {len(dupes)} patterns found by multiple nodes")
-
-        # Root-level synthesis across all segments
-        if len(segment_results) > 1 and self.budget.can_spend():
-            print(f"\n  [ROOT] SYNTHESIZING all {len(segment_results)} segments...")
-            virtual_root = NodeResult(
-                node_id="root", parent_id=None,
-                scope_description="Root synthesis across all segments",
-                survey="", observations=[], child_directives=[],
-                unresolved=[], raw_reasoning="",
-            )
-            # Convert worker results to NodeResult for synthesis compatibility
-            synth_inputs = [self._worker_result_to_node_result(r) for r in segment_results]
-            root_synthesis = await synthesize(virtual_root, synth_inputs, lenses)
-            self.all_syntheses.append(root_synthesis)
-            self.budget.record("synthesis", root_synthesis.cost)
-            self._update_tokens(root_synthesis.token_usage)
-
-            # Also collect any findings from worker Turn 2 reviews
-            for r in segment_results:
-                for f in r.get("findings", []):
-                    events.emit("finding_discovered", {
-                        "node_id": r.get("node_id", ""),
-                        "summary": str(f.get("summary", ""))[:80],
-                        "type": f.get("type", "cross_cutting"),
-                    })
-
-        self._log_progress()
-
-        # --- Phase 3: Deep-dives ---
+        # --- Phase 2: Deep-dives ---
         await self._run_deep_dives(lenses)
 
-        # --- Phase 4: Validation ---
+        # --- Phase 3: Validation ---
         await self._run_validation()
 
-        # --- Phase 5: Significance gate ---
+        # --- Phase 4: Significance gate ---
         await self._run_significance_gate()
 
-        # --- Phase 6: Impact (only for headline/significant findings) ---
+        # --- Phase 5: Impact ---
         await self._run_impact_analysis()
 
         # --- Done ---
@@ -1601,6 +1402,179 @@ Respond ONLY with a JSON array."""}],
                              "record": a.get("entity", a.get("record", "")),
                              "flagged_by": [tech_key], "evidence": _build_evidence(a)})
         return flat
+
+    async def _run_role_authoring_exploration(self, charter: str, segments: list, lenses: list) -> dict:
+        """Role-authoring path: first node runs formation-time assessment, hires recursively."""
+        from .worker_v2 import RoleWorkerNode
+        from .schemas import RoleDefinition
+
+        print(f"\n  [ROLE PATH] Using role-authoring exploration path")
+
+        # Create the first node — engagement lead
+        exploration_budget = self.budget.total * self.budget.phase_limits["exploration"]
+        first_role = RoleDefinition(
+            name="engagement lead",
+            success_bar=(
+                "Design and staff an organization that produces findings meeting "
+                "the charter's standards. Success means: the team you hire covers "
+                "the engagement's territory without gaps or overlaps, each hire has "
+                "a concrete bar you can judge their output against, and the findings "
+                "that come back would satisfy the person who wrote the charter."
+            ),
+            heuristic=(
+                "When uncertain whether to investigate directly or hire, ask: "
+                "does this scope require distinct kinds of work that a single "
+                "pass cannot cover? If yes, hire. If the work is cohesive and "
+                "fits your budget, investigate."
+            ),
+        )
+
+        first_directive = Directive(
+            scope=Scope(
+                source=self.data_source.__class__.__name__,
+                filters={},
+                description=charter[:2000],  # Charter IS the scope for the first node
+            ),
+            lenses=lenses,
+            parent_context="You are the first node. The charter above is your engagement directive.",
+            purpose="Design and execute the investigation the charter demands.",
+            node_id=str(uuid.uuid4()),
+            tree_position="1",
+            segment_id="root",
+            survey_anomalies=getattr(self, '_flat_anomalies', []),
+            workspace_path=self._workspace_path,
+            role=first_role,
+        )
+
+        first_node = RoleWorkerNode(
+            directive=first_directive,
+            data_source=self.data_source,
+            budget=exploration_budget,
+            total_budget=self.budget.total,
+            semaphore=self._semaphore,
+            budget_pool=self.budget,
+            parent_pool_available=self.budget.exploration_remaining(),
+            depth=0,
+            max_depth=self._max_depth,
+            leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
+        )
+
+        print(f"  [ROLE PATH] First node: {first_role.name} (${exploration_budget:.2f})")
+
+        # Run the first node — it will recursively hire and investigate
+        result = await first_node.run()
+
+        # Collect results from the role-authoring tree
+        self._segment_workers = [first_node]
+        self._collect_worker_stats_v2(first_node)
+        self._collect_worker_node_results_v2(first_node)
+
+        # Print diagnostic summary
+        print(f"\n  {'═'*54}")
+        print(f"  NODE DIAGNOSTIC SUMMARY (ROLE PATH)")
+        print(f"  {'─'*54}")
+        print(f"  Total nodes: {self.stats.nodes_spawned}")
+        print(f"  Observations: {self.stats.observations_collected}")
+        print(f"  Max depth: {self.stats.max_depth_reached}")
+        print(f"  {'═'*54}")
+
+        # Extract synthesis role from engagement lead's output (if authored)
+        synthesis_role = result.get("synthesis_role") if isinstance(result, dict) else None
+
+        # Synthesize if we have observations
+        if len(self.all_node_results) > 1 and self.budget.can_spend():
+            # Load workspace context for synthesis
+            ws_context = ""
+            if hasattr(self, '_workspace_path') and self._workspace_path:
+                from .workspace import OrgWorkspace
+                ws = OrgWorkspace(self._workspace_path)
+                ws_charter = ws.read_charter()
+                if ws_charter:
+                    ws_context = f"## ORGANIZATIONAL CHARTER\n\n{ws_charter}\n\n"
+
+            if synthesis_role:
+                print(f"\n  [ROOT] SYNTHESIZING with authored role: {synthesis_role.get('name', '?')}")
+            else:
+                print(f"\n  [ROOT] SYNTHESIZING all observations...")
+            virtual_root = NodeResult(
+                node_id="root", parent_id=None,
+                scope_description="Root synthesis across all departments",
+                survey="", observations=[], child_directives=[],
+                unresolved=[], raw_reasoning="",
+            )
+            synth_inputs = list(self.all_node_results)
+            root_synthesis = await synthesize(
+                virtual_root, synth_inputs, lenses,
+                synthesis_role=synthesis_role,
+                workspace_context=ws_context,
+            )
+            self.all_syntheses.append(root_synthesis)
+            self.budget.record("synthesis", root_synthesis.cost)
+            self._update_tokens(root_synthesis.token_usage)
+
+        self._log_progress()
+
+    def _collect_worker_stats_v2(self, root_worker):
+        """Collect stats from the role-authoring worker tree."""
+        def walk(worker):
+            self.stats.nodes_spawned += 1
+            if not worker.child_workers:
+                self.stats.nodes_resolved += 1
+            self.stats.observations_collected += len(worker.observations)
+            self.stats.max_depth_reached = max(self.stats.max_depth_reached, worker.depth)
+            self.stats.total_tokens += (
+                worker.token_usage.get("input_tokens", 0) +
+                worker.token_usage.get("output_tokens", 0)
+            )
+            self.stats.api_calls += 1
+            if worker.child_workers:
+                self._branch_counts.append(len(worker.child_workers))
+            for child in worker.child_workers:
+                walk(child)
+        walk(root_worker)
+        if self._branch_counts:
+            self.stats.avg_branching_factor = sum(self._branch_counts) / len(self._branch_counts)
+
+    def _collect_worker_node_results_v2(self, root_worker):
+        """Collect NodeResults from role-authoring worker tree."""
+        def walk(worker):
+            obs_objects = []
+            for obs_data in worker.observations:
+                if isinstance(obs_data, dict):
+                    src = obs_data.get("source", {})
+                    obs_objects.append(Observation(
+                        node_id=worker.node_id,
+                        raw_evidence=obs_data.get("raw_evidence", ""),
+                        source=Source(
+                            doc_id=src.get("doc_id", ""),
+                            title=src.get("title", ""),
+                            agency=src.get("agency", ""),
+                            date=src.get("date", ""),
+                            section=src.get("section", ""),
+                            url=src.get("url", ""),
+                        ),
+                        observation_type=obs_data.get("observation_type", "pattern"),
+                        statistical_grounding=obs_data.get("statistical_grounding", ""),
+                        local_hypothesis=obs_data.get("local_hypothesis", ""),
+                        confidence=obs_data.get("confidence", 0.5),
+                        surprising_because=obs_data.get("surprising_because", ""),
+                    ))
+            nr = NodeResult(
+                node_id=worker.node_id,
+                parent_id=worker.directive.parent_id,
+                scope_description=worker.directive.scope.description[:200],
+                survey="",
+                observations=obs_objects,
+                child_directives=[],
+                unresolved=[],
+                raw_reasoning="",
+                thinking=worker.thinking_log[0]["thinking"] if worker.thinking_log else "",
+                cost=worker.spent,
+            )
+            self.all_node_results.append(nr)
+            for child in worker.child_workers:
+                walk(child)
+        walk(root_worker)
 
     async def _aggregate_anomalies(self, all_anomalies: dict) -> tuple[list[dict], str]:
         """Aggregate anomalies into pattern clusters via one LLM call.
