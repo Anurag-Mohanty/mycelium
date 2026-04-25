@@ -29,30 +29,48 @@ VALIDATION STATUS: {validation_status}
 
 ---
 
-Score this finding on one question: would a knowledgeable practitioner in this \
-domain say "I didn't know that" about this finding?
+Score this finding on TWO dimensions:
 
-YES — The finding reveals something a practitioner would not already know. \
-It is specific, evidence-backed, and changes understanding of the domain.
+1. FACTUAL NOVELTY — would a practitioner say "I didn't know that fact"?
 
-MARGINAL — The finding has specific evidence but the conclusion is either \
-partially known, weakly supported, or the practitioner would say "I suspected \
-that but hadn't seen it quantified."
+YES — The underlying factual observation is something a practitioner would \
+not already know. Specific data that has not been publicly documented.
 
-NO — The finding restates something a knowledgeable practitioner already knows. \
-It may have specific data but the insight itself is not novel. The charter's \
-"what is already known" section covers this category of finding.
+MARGINAL — The factual observation is partially known or suspected but now \
+quantified with specific evidence the practitioner hadn't seen.
 
-Be honest. Most investigation runs produce mostly NO findings with a few \
-MARGINAL and occasionally a YES. That's normal. The bar for YES is high — \
-the practitioner is experienced and well-informed.
+NO — The factual observation restates something practitioners already know. \
+The charter's "what is already known" section covers this category.
+
+2. INTERPRETIVE CERTAINTY — how strongly does the interpretation follow \
+from the facts?
+
+HIGH — The interpretation is well-supported by the cited evidence. Few \
+alternative explanations fit the facts.
+
+MEDIUM — The interpretation is plausible given the evidence but other \
+explanations could also fit.
+
+LOW — The interpretation makes a large leap from the cited evidence. \
+Speculative.
+
+COMBINED SCORE: derived from both dimensions.
+- YES: factual_novelty=YES and interpretive_certainty=HIGH or MEDIUM
+- YES_FACTUAL: factual_novelty=YES but interpretive_certainty=LOW \
+  (the fact is novel even if the interpretation is uncertain)
+- MARGINAL: factual_novelty=MARGINAL, or YES with LOW certainty
+- NO: factual_novelty=NO regardless of interpretation
 
 Return JSON:
 {{
-    "score": "yes | marginal | no",
-    "reasoning": "why this score — reference the charter's standards and what a practitioner would already know",
-    "what_practitioner_knows": "the closest thing a practitioner already knows to this finding",
-    "what_is_new": "what, if anything, this finding adds beyond existing knowledge"
+    "factual_novelty": "yes | marginal | no",
+    "factual_novelty_reasoning": "what fact is claimed, is it known or novel",
+    "interpretive_certainty": "high | medium | low",
+    "interpretive_certainty_reasoning": "how well the interpretation follows from the facts",
+    "combined_score": "yes | yes_factual | marginal | no",
+    "reasoning": "overall assessment",
+    "what_practitioner_knows": "closest known fact to this finding",
+    "what_is_new": "what this finding adds beyond existing knowledge"
 }}
 
 Respond ONLY with valid JSON, no other text.
@@ -103,13 +121,16 @@ async def score_findings(charter: str, findings: list[dict]) -> list[dict]:
             start = raw.find("{")
             end = raw.rfind("}") + 1
             result = json.loads(raw[start:end]) if start >= 0 and end > start else {
-                "score": "no", "reasoning": "parse error"
+                "combined_score": "no", "reasoning": "parse error"
             }
 
+        combined = result.get("combined_score", result.get("score", "no"))
         scores.append({
             "finding_index": i,
             "finding_summary": str(summary)[:100],
-            "score": result.get("score", "no"),
+            "score": combined,
+            "factual_novelty": result.get("factual_novelty", ""),
+            "interpretive_certainty": result.get("interpretive_certainty", ""),
             "reasoning": result.get("reasoning", ""),
             "what_practitioner_knows": result.get("what_practitioner_knows", ""),
             "what_is_new": result.get("what_is_new", ""),
@@ -184,7 +205,8 @@ async def score_run(run_dir: str) -> dict:
         "findings_scored": len(scores),
         "scores": scores,
         "summary": {
-            "yes": sum(1 for s in scores if s["score"] == "yes"),
+            "yes": sum(1 for s in scores if s["score"] in ("yes", "yes_factual")),
+            "yes_factual": sum(1 for s in scores if s["score"] == "yes_factual"),
             "marginal": sum(1 for s in scores if s["score"] == "marginal"),
             "no": sum(1 for s in scores if s["score"] == "no"),
         },

@@ -1550,22 +1550,28 @@ STEP 1 — FORMATION-TIME ASSESSMENT
 Read your role definition. Read your scope. Read your budget. Decide \
 whether to do this work yourself or hire.
 
-Think through this explicitly:
+Two tests, both must pass to justify hiring:
 
-- What does your bar demand? What would meeting it look like concretely \
-  for the scope in front of you?
-- Does meeting your bar require genuinely distinct kinds of cognition \
-  that a single pass cannot cover? If yes, hiring is warranted.
-- If the work is cohesive — one kind of analysis across the data in \
-  front of you — do it yourself. Hiring adds real overhead: you spend \
-  budget authoring each role, briefing each hire, and reviewing their \
-  work at Turn 2. If the work itself costs less than the overhead of \
-  setting up hires to succeed, hiring is wasteful even when budget \
-  would allow it.
-- Slicing the same kind of work into smaller pieces for multiple hires \
-  is not delegation — it is fragmentation. Each hire needs a meaningfully \
-  different role, not the same role applied to a subset. If you cannot \
-  articulate what different cognition each hire brings, do it yourself.
+FLOOR TEST: Is delegation overhead (authoring roles + briefing + reviewing) \
+less than doing the work directly? If the work itself costs less than \
+setting up hires to succeed, do it yourself. Slicing the same kind of \
+analysis into smaller pieces is fragmentation, not delegation.
+
+CEILING TEST: Can you hold this scope at your bar's required depth in one \
+careful pass? Reason concretely: how many items are in your scope? What \
+depth of analysis does your bar require — per-item, cross-item, or both? \
+How much of your context is consumed by your role definition and parent \
+context, leaving how much for actual data? If the scope exceeds what one \
+careful pass can cover at the depth your bar demands, hiring is warranted.
+
+Hire when the scope has dimensions requiring distinct cognition you cannot \
+bring yourself, OR the scope at required depth exceeds your capacity for \
+one pass. Both must be reasoned concretely, not asserted.
+
+Your formation assessment output must include a reasoning trace grounding \
+the decision in observable inputs: specific scope size, specific bar \
+requirements, specific capacity estimate. A decision without this trace \
+is not trustworthy.
 
 If alone: proceed to Step 2 (investigate).
 If hire: skip to Step 3 (design your team).
@@ -1600,29 +1606,26 @@ For each hire you need:
 A. What role do they play? Give it a name that captures the kind of \
    cognition they bring to this work, not just a topic label.
 
-B. What is their bar? Be specific enough that when they return, you can \
+B. Why does this hire exist? State the specific dimension of the work \
+   this hire addresses and why it requires cognition distinct from yours \
+   and from the other hires. A hire without a grounded justification is \
+   not a real hire.
+
+C. What is their bar? Be specific enough that when they return, you can \
    look at their output and judge whether they met it. Vague bars \
-   produce vague work. "Find interesting things" is not a bar. \
-   "Identify specific instances where X contradicts Y, with named \
-   entities and exact figures" is a bar.
+   produce vague work. The bar must be concrete enough to fail against.
 
-C. What is their heuristic? When they face an ambiguous decision during \
-   their work, what posture should they take? This is guidance for the \
-   moments their bar doesn't cover.
+D. What is their heuristic? When they face an ambiguous decision during \
+   their work, what posture should they take? Include continuation \
+   guidance: default to returning surplus rather than hiring further, \
+   unless threads require genuinely different cognition.
 
-D. What scope do they get? Divide your scope into non-overlapping areas. \
+E. What scope do they get? Divide your scope into non-overlapping areas. \
    Each hire gets a distinct piece of the work.
 
-E. What budget do they get? Each hire must receive at least \
+F. What budget do they get? Each hire must receive at least \
    ${leaf_viable_envelope:.2f}. Prefer fewer well-funded hires over \
    many underfunded ones.
-
-F. For each hire's heuristic, include continuation guidance. When a hire \
-   becomes a manager and faces a Turn 2 continuation decision, what should \
-   their default be? Continuation should be reserved for threads that need \
-   genuinely different cognition — not for funding more of the same kind of \
-   work on a smaller slice. Default to returning surplus so downstream \
-   phases have budget to work with.
 
 Finally, author a SYNTHESIS ROLE. After your hires return, their findings \
 will be cross-referenced and combined. The synthesis role defines what \
@@ -1641,7 +1644,10 @@ Return JSON:
 {{
     "formation_assessment": {{
         "decision": "investigate | hire",
-        "reasoning": "why you made this decision — reference your bar, scope, and budget"
+        "scope_size": "how many items, what dimensions",
+        "bar_depth": "what depth of analysis the bar requires",
+        "capacity_estimate": "can one pass cover this scope at this depth",
+        "reasoning": "grounded decision — specific scope vs specific capacity vs specific bar"
     }},
     "observations": [
         {{
@@ -1668,8 +1674,9 @@ Return JSON:
             "role": {{
                 "name": "role name — kind of cognition, not topic label",
                 "success_bar": "what good output looks like for this role — specific, judgeable",
-                "heuristic": "posture for ambiguous moments"
+                "heuristic": "posture for ambiguous moments + continuation guidance"
             }},
+            "justification": "what dimension of the work this hire covers and why it requires distinct cognition",
             "scope_description": "what this hire investigates — non-overlapping with siblings",
             "purpose": "why this hire is needed and what you need from them",
             "data_filter": {{}},
@@ -1811,26 +1818,25 @@ HIRE REPORTS:
 STEP 1 — EVALUATE EACH HIRE AGAINST THEIR AUTHORED BAR
 
 For each hire, read the bar you wrote for them. Then read their output. \
-Answer three questions:
+Your evaluation must map specifics to specifics — not assert a classification.
 
-A. Did they meet the bar? Look at what you defined as success for this \
-   role. Compare their actual output against it. Be specific — quote \
-   the bar, then state what in their output satisfies or falls short.
+A. Quote the bar you authored. Then identify the specific elements in \
+   the hire's output that address or fail to address each requirement in \
+   the bar. Element by element, not in aggregate.
 
-B. If they did not meet the bar, why?
-   - Did they reason poorly? The bar was right, but the hire failed \
-     to clear it. Their output is weak, off-target, or superficial \
-     relative to what the bar demanded.
-   - Did you author the wrong bar? Looking at what the hire actually \
-     encountered, the bar you wrote was misaligned with the work. The \
-     hire did reasonable work; the bar didn't match the territory.
+B. Classification (grounded in the mapping above):
+   - MET: Each bar element has a corresponding output element that clears it.
+   - POOR_REASONING: Specific bar elements are unmet, and the hire had the \
+     data to meet them. Name which elements and what the hire produced instead.
+   - WRONG_ROLE: The hire produced reasonable work that doesn't map to the bar, \
+     because the bar was misaligned with the territory. Name what the hire found \
+     that the bar didn't anticipate, and what bar element has no reasonable path \
+     to meeting given the actual data.
 
-C. Classification:
-   - MET: Output clears the bar. Integrate findings into your synthesis.
-   - POOR_REASONING: Bar was right, hire fell short. Consider rebriefing \
-     or hiring differently if continuation budget allows.
-   - WRONG_ROLE: Bar was misaligned. Revise the role definition for any \
-     continuation on this thread.
+A classification without specific element-to-element reasoning is not \
+trustworthy. If you cannot point to specific bar elements and specific \
+output elements, default to MET — do not classify poorly what you cannot \
+evaluate concretely.
 
 STEP 2 — DECIDE WHAT TO DO WITH YOUR REMAINING BUDGET
 
@@ -1875,16 +1881,17 @@ Return JSON:
         {{
             "hire_role_name": "the role name you authored",
             "bar_quoted": "the bar you wrote for this role",
-            "bar_met": true,
+            "bar_elements_met": ["specific bar element → specific output element that meets it"],
+            "bar_elements_unmet": ["specific bar element → what was produced instead, or nothing"],
             "classification": "MET | POOR_REASONING | WRONG_ROLE",
-            "reasoning": "specific comparison of output against bar",
+            "classification_grounding": "which specific bar-to-output mappings justify this classification",
             "key_findings_to_integrate": ["findings that passed the bar"],
             "worthwhile_threads": ["threads worth continuing"]
         }}
     ],
     "continuation_decision": {{
         "action": "CONTINUE | REHIRE | RESOLVE",
-        "reasoning": "why this action",
+        "reasoning": "grounded: specific threads, specific cognition needed, specific downstream budget consideration",
         "continuation_directives": [
             {{
                 "role": {{
