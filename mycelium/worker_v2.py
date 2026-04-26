@@ -122,7 +122,7 @@ class RoleWorkerNode:
         if decision == "hire":
             return await self._handle_hiring(result)
         else:
-            return self._handle_investigation(result)
+            return await self._handle_investigation(result)
 
     async def _handle_hiring(self, result: dict) -> dict:
         """Process hire directives — become a manager."""
@@ -175,14 +175,18 @@ class RoleWorkerNode:
             role_data = hd.get("role", {})
             role = RoleDefinition(
                 name=role_data.get("name", f"hire_{i}"),
+                mission=role_data.get("mission", ""),
                 success_bar=role_data.get("success_bar", ""),
                 heuristic=role_data.get("heuristic", ""),
             )
 
-            # Build child directive
+            # Build child directive — data assignment from hire reasoning
             child_filters = hd.get("data_filter", {})
             if not child_filters or not isinstance(child_filters, dict):
+                # No data assignment authored — fall back to parent's data
+                # This is a reasoning gap: the manager didn't partition
                 child_filters = self.directive.data_filter or self.directive.scope.filters
+                self._log(f"  Hire '{role.name}': no data_filter authored, inheriting parent scope")
 
             child_directive = Directive(
                 scope=Scope(
@@ -292,6 +296,7 @@ class RoleWorkerNode:
 
             hire_reports_parts.append(
                 f"--- HIRE: {role.name} ---\n"
+                f"AUTHORED MISSION: {role.mission}\n"
                 f"AUTHORED BAR: {role.success_bar}\n"
                 f"AUTHORED HEURISTIC: {role.heuristic}\n"
                 f"SCOPE: {child.directive.scope.description[:200]}\n"
@@ -346,6 +351,7 @@ class RoleWorkerNode:
         prompt = _prompts.MANAGER_TURN2_PROMPT_V2.format(
             budget_remaining=remaining,
             role_name=self._role.name,
+            role_mission=self._role.mission or "Produce the most insightful findings this engagement can yield.",
             role_bar=self._role.success_bar,
             scope_description=self.directive.scope.description[:500],
             workspace_context=workspace_context,
@@ -374,6 +380,9 @@ class RoleWorkerNode:
             result = _parse_json(output)
         except (json.JSONDecodeError, ValueError):
             return None
+
+        # Store full Turn 2 structured output for diagnostics
+        self._turn2_result = result
 
         # Log evaluations
         for ev in result.get("hire_evaluations", []):
@@ -404,6 +413,7 @@ class RoleWorkerNode:
             role_data = cd.get("role", {})
             role = RoleDefinition(
                 name=role_data.get("name", f"continuation_{i}"),
+                mission=role_data.get("mission", ""),
                 success_bar=role_data.get("success_bar", ""),
                 heuristic=role_data.get("heuristic", ""),
             )
@@ -451,12 +461,233 @@ class RoleWorkerNode:
             if isinstance(cont_result, dict):
                 self.child_results.append(cont_result)
 
-    def _handle_investigation(self, result: dict) -> dict:
-        """Process direct investigation results."""
+    async def _handle_investigation(self, result: dict) -> dict:
+        """Process investigation results with mid-investigation reassessment."""
         self.observations = self._parse_observations(result.get("observations", []))
         self.metrics = result.get("self_evaluation", {})
-        self.status = "resolved"
+        self._formation_summary = result.get("formation_assessment", {})
 
+        n_obs = len(self.observations)
+        remaining = max(0, self.budget - self.spent)
+
+        # Re-assessment: re-run floor/ceiling tests with new information
+        if n_obs > 0 and remaining >= 0.03:
+            reassessment = await self._reassess()
+            if reassessment:
+                decision = reassessment.get("decision", "RESOLVE")
+                post_reassess_remaining = max(0, self.budget - self.spent)
+
+                if decision == "INVESTIGATE_FURTHER" and post_reassess_remaining >= 0.03:
+                    self._log(f"INVESTIGATING FURTHER ({n_obs} initial obs)")
+                    await self._extend_investigation(reassessment)
+
+                elif decision == "HIRE" and post_reassess_remaining >= self.leaf_viable_envelope * 2:
+                    self._log(f"HIRING from investigation ({n_obs} initial obs, ${post_reassess_remaining:.2f} remaining)")
+                    return await self._become_manager(reassessment, result)
+
+        # Resolve with current observations
+        self.status = "resolved"
+        n_obs = len(self.observations)
+        top_obs = self.observations[0].get("raw_evidence", "")[:80] if self.observations else ""
+        self._log(f"RESOLVED: {n_obs} observations (role: {self._role.name})")
+        events.emit("node_resolved", {
+            "node_id": self.node_id, "tree_position": self.pos,
+            "observations_count": n_obs, "cost_spent": self.spent,
+            "top_observation": top_obs,
+        })
+        return self._result()
+
+    async def _reassess(self) -> dict | None:
+        """Mid-investigation reassessment: should I continue, extend, or become manager?"""
+        # Format initial observations for the reassessment prompt
+        obs_lines = []
+        for i, obs in enumerate(self.observations, 1):
+            raw = obs.get("raw_evidence", "")[:200] if isinstance(obs, dict) else str(obs)[:200]
+            sig = obs.get("signal_strength", "?") if isinstance(obs, dict) else "?"
+            obs_lines.append(f"  {i}. [{sig}] {raw}")
+        observations_summary = "\n".join(obs_lines)
+
+        formation = getattr(self, '_formation_summary', {})
+        formation_summary = (
+            f"Decision: {formation.get('decision', '?')}\n"
+            f"Scope: {formation.get('scope_size', '?')}\n"
+            f"Bar depth: {formation.get('bar_depth', '?')}\n"
+            f"Capacity: {formation.get('capacity_estimate', '?')}\n"
+            f"Reasoning: {formation.get('reasoning', '?')[:200]}"
+        )
+
+        remaining = max(0, self.budget - self.spent)
+        min_hire_budget = self.leaf_viable_envelope * 2
+
+        prompt = _prompts.WORKER_REASSESSMENT_PROMPT_V2.format(
+            role_name=self._role.name,
+            role_mission=self._role.mission or "Produce the most insightful findings this data can yield.",
+            role_bar=self._role.success_bar,
+            formation_summary=formation_summary,
+            observation_count=len(self.observations),
+            observations_summary=observations_summary,
+            budget_allocated=self.budget,
+            budget_spent=self.spent,
+            budget_remaining=remaining,
+            leaf_viable_envelope=self.leaf_viable_envelope,
+            min_hire_budget=min_hire_budget,
+        )
+
+        # Budget gate
+        if self.envelope_exhausted:
+            return None
+        if self._budget_pool and self._budget_pool.exploration_exhausted:
+            return None
+
+        async with self._semaphore:
+            thinking, output, cost, usage = await _call_llm(prompt)
+
+        self.spent += cost
+        self.token_usage["input_tokens"] += usage["input_tokens"]
+        self.token_usage["output_tokens"] += usage["output_tokens"]
+        if self._budget_pool:
+            self._budget_pool.record("exploration", cost)
+        self.thinking_log.append({"turn": "reassessment", "thinking": thinking})
+        _emit_thinking_chunks(self.node_id, "reassessment", thinking)
+
+        try:
+            result = _parse_json(output)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+        decision = result.get("decision", "CONTINUE_INVESTIGATING")
+        self._log(f"  Reassessment: {decision}")
+        return result
+
+    async def _extend_investigation(self, reassessment: dict):
+        """Second reasoning turn to push initial observations deeper."""
+        # Format initial observations
+        obs_text = ""
+        for i, obs in enumerate(self.observations, 1):
+            raw = obs.get("raw_evidence", "")[:300] if isinstance(obs, dict) else str(obs)[:300]
+            hyp = obs.get("local_hypothesis", "")[:150] if isinstance(obs, dict) else ""
+            obs_text += f"  {i}. {raw}\n     Hypothesis: {hyp}\n"
+
+        # Format threads to push deeper
+        threads = reassessment.get("reassessment", {}).get("threads", [])
+        thread_text = ""
+        for t in threads:
+            if isinstance(t, dict) and t.get("substantive"):
+                thread_text += f"  - {t.get('thread', '?')}: {t.get('reasoning', '')[:100]}\n"
+        if not thread_text:
+            thread_text = "  Push deeper on all initial observations."
+
+        reasoning = reassessment.get("decision_reasoning", "")
+
+        # Re-fetch data (same filters, worker sees same records for deeper analysis)
+        filters = dict(self.directive.data_filter or self.directive.scope.filters)
+        schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
+        if schema and filters:
+            valid_params = set(schema.keys())
+            filters = {k: v for k, v in filters.items() if k in valid_params}
+        documents = await self.data_source.fetch(filters, max_results=100)
+        fetched_data = _format_documents(documents) if documents else "(no data)"
+
+        prompt = _prompts.WORKER_EXTENSION_PROMPT_V2.format(
+            role_name=self._role.name,
+            role_mission=self._role.mission or "Produce the most insightful findings this data can yield.",
+            role_bar=self._role.success_bar,
+            initial_observations=obs_text,
+            reassessment_reasoning=reasoning,
+            extension_threads=thread_text,
+            doc_count=len(documents) if documents else 0,
+            fetched_data=fetched_data,
+        )
+
+        # Budget gate
+        if self.envelope_exhausted:
+            return
+        if self._budget_pool and self._budget_pool.exploration_exhausted:
+            return
+
+        async with self._semaphore:
+            thinking, output, cost, usage = await _call_llm(prompt)
+
+        self.spent += cost
+        self.token_usage["input_tokens"] += usage["input_tokens"]
+        self.token_usage["output_tokens"] += usage["output_tokens"]
+        if self._budget_pool:
+            self._budget_pool.record("exploration", cost)
+        self.thinking_log.append({"turn": "extension", "thinking": thinking})
+        _emit_thinking_chunks(self.node_id, "extension", thinking)
+
+        try:
+            result = _parse_json(output)
+        except (json.JSONDecodeError, ValueError):
+            return
+
+        # Merge extended observations with initial ones
+        extended_obs = self._parse_observations(result.get("extended_observations", []))
+        self.observations.extend(extended_obs)
+        self._log(f"  Extended: +{len(extended_obs)} observations (total {len(self.observations)})")
+
+        # Update metrics from extension self-eval
+        ext_eval = result.get("self_evaluation", {})
+        if ext_eval:
+            self.metrics = ext_eval
+
+    async def _become_manager(self, reassessment: dict, initial_result: dict) -> dict:
+        """Worker transitions to manager role mid-investigation."""
+        # Keep initial observations as manager's own findings
+        # The worker has already produced observations — those stay
+
+        # Build hire directives from reassessment threads
+        threads = reassessment.get("reassessment", {}).get("threads", [])
+        hire_threads = [t for t in threads
+                       if isinstance(t, dict) and not t.get("same_cognition", True)]
+
+        if len(hire_threads) < 2:
+            # Not enough distinct-cognition threads — extend instead
+            self._log(f"  Not enough distinct threads for hiring, extending instead")
+            await self._extend_investigation(reassessment)
+            return self._resolve_with_current()
+
+        # Need a formation call to design the team properly — the worker
+        # reasons about what hires to create from its observations
+        remaining = max(0, self.budget - self.spent)
+
+        # Build context from reassessment for the hiring decision
+        obs_summary = "\n".join(
+            f"  - {obs.get('raw_evidence', '')[:150]}"
+            for obs in self.observations[:10]
+        )
+
+        # Re-run formation with hire decision forced, passing current observations as context
+        self.directive.parent_context = (
+            f"MID-INVESTIGATION PIVOT: You initially investigated and found:\n"
+            f"{obs_summary}\n\n"
+            f"Your reassessment identified threads requiring different cognition. "
+            f"Design a team to pursue those threads. Budget: ${remaining:.2f}.\n\n"
+            f"Original context: {self.directive.parent_context or ''}"
+        )
+
+        # Call the standard formation prompt but with updated context
+        hire_result = await self._reason()
+        if hire_result is None:
+            return self._resolve_with_current()
+
+        # Force the hire path — we already decided to become manager
+        formation = hire_result.get("formation_assessment", {})
+        formation["decision"] = "hire"
+        hire_directives = hire_result.get("hire_directives", [])
+
+        if len(hire_directives) < 2:
+            # LLM didn't produce enough hires — resolve with what we have
+            self._log(f"  Become-manager: insufficient hires authored, resolving")
+            return self._resolve_with_current()
+
+        self._log(f"  Became manager: {len(hire_directives)} hires")
+        self._became_manager = True
+        return await self._handle_hiring(hire_result)
+
+    def _resolve_with_current(self) -> dict:
+        """Resolve with current observations — helper for fallback paths."""
+        self.status = "resolved"
         n_obs = len(self.observations)
         top_obs = self.observations[0].get("raw_evidence", "")[:80] if self.observations else ""
         self._log(f"RESOLVED: {n_obs} observations (role: {self._role.name})")
@@ -548,6 +779,7 @@ class RoleWorkerNode:
         prompt = _prompts.NODE_REASONING_PROMPT_V2.format(
             current_date=datetime.date.today().isoformat(),
             role_name=self._role.name or "investigator",
+            role_mission=self._role.mission or "Produce the most insightful findings this data can yield.",
             role_bar=self._role.success_bar or "Produce specific, evidence-backed findings.",
             role_heuristic=self._role.heuristic or "When uncertain, favor specificity over breadth.",
             scope_description=self.directive.scope.description,
@@ -635,8 +867,10 @@ class RoleWorkerNode:
                 "depth": self.depth,
                 "max_depth": self.max_depth,
             },
-            "decision": "hired" if self.child_workers else "investigated",
+            "decision": "became_manager" if (self.child_workers and hasattr(self, '_became_manager')) else ("hired" if self.child_workers else "investigated"),
             "decision_reasoning": "",
+            "turn2_result": getattr(self, '_turn2_result', None),
+            "reassessment_turns": len([t for t in self.thinking_log if t.get("turn") in ("reassessment", "extension")]),
         }
 
     def _build_node_json(self) -> dict:
@@ -655,6 +889,7 @@ class RoleWorkerNode:
             "thinking": self.thinking_log[0]["thinking"] if self.thinking_log else "",
             "thinking_log": self.thinking_log,
             "turn2_review": self.thinking_log[1]["thinking"] if len(self.thinking_log) > 1 else "",
+            "turn2_result": getattr(self, '_turn2_result', None),
             "metrics": self.metrics,
             "token_usage": self.token_usage,
             "cost": self.spent,

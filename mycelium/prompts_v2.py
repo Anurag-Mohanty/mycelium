@@ -1507,7 +1507,8 @@ Today's date is {current_date}.
 
 YOUR ROLE:
 Name: {role_name}
-Bar: {role_bar}
+Mission: {role_mission}
+Bar (minimum acceptable): {role_bar}
 Heuristic: {role_heuristic}
 
 YOUR SCOPE:
@@ -1515,6 +1516,15 @@ YOUR SCOPE:
 
 YOUR PURPOSE (why you were hired):
 {purpose}
+
+MISSION vs BAR: Your mission is what excellent work looks like. Your bar \
+is the floor — below it is failure. Engage with the work fully. Meet the \
+bar through real investigation. If the work supports reaching further \
+toward the mission, do so. If the work, honestly examined, doesn't support \
+reaching further, conclude that with grounded reasoning about why. \
+Excellence includes the discipline to stop when stopping is the right \
+answer. Slacking is failing to engage. Stopping with grounded reasoning \
+is not slacking — it is honest assessment of what the work supports.
 
 CONTEXT FROM YOUR MANAGER (if any):
 {parent_context}
@@ -1582,9 +1592,10 @@ Survey what is in front of you. Read the data. Form impressions. \
 Develop hypotheses from what you observe, not from prior expectations.
 
 For each item you are considering reporting, hold it against your role's \
-bar before anything else. Your bar is closer to the work than the charter \
-is. Ask: "Does this meet the bar I was hired to clear?" If not, it does \
-not go in your output regardless of how interesting it is.
+mission first, then check the bar. Ask: "Does this advance my mission?" \
+If yes, include it. Then check: "Does this at least clear my bar?" If \
+not, it does not go in your output regardless of how interesting it is. \
+The mission pushes you to find the best work; the bar catches failure.
 
 If the charter is present in your workspace context, check the output \
 against the charter's standards as well. The bar fires first; the charter \
@@ -1611,21 +1622,48 @@ B. Why does this hire exist? State the specific dimension of the work \
    and from the other hires. A hire without a grounded justification is \
    not a real hire.
 
-C. What is their bar? Be specific enough that when they return, you can \
-   look at their output and judge whether they met it. Vague bars \
-   produce vague work. The bar must be concrete enough to fail against.
+C. What is their mission? What does excellent work look like for this \
+   hire in this engagement? A direction that pushes beyond adequate. \
+   The mission is what you want; the bar is what you will accept.
 
-D. What is their heuristic? When they face an ambiguous decision during \
-   their work, what posture should they take? Include continuation \
-   guidance: default to returning surplus rather than hiring further, \
-   unless threads require genuinely different cognition.
+D. What is their bar? The minimum acceptable output — below this is \
+   failure. Be specific enough that when they return, you can judge \
+   whether they met it. The bar must be concrete enough to fail against.
 
-E. What scope do they get? Divide your scope into non-overlapping areas. \
-   Each hire gets a distinct piece of the work.
+E. What is their heuristic? When they face an ambiguous decision during \
+   their work, what posture should they take?
 
-F. What budget do they get? Each hire must receive at least \
-   ${leaf_viable_envelope:.2f}. Prefer fewer well-funded hires over \
-   many underfunded ones.
+F. What data do they examine? CRITICAL: each hire MUST receive a \
+   different data_filter so they examine different records. The filter \
+   controls what the data source API returns — different filter values \
+   produce different records. If you leave data_filter empty or give \
+   every hire the same filter, they will all see the same 100 records \
+   and produce convergent findings regardless of role differences.
+
+   Look at the DATA SOURCE FILTER SCHEMA above. Pick a filter \
+   parameter and assign different values to different hires. For \
+   example, if the schema has a "keyword" parameter, assign different \
+   keywords to different hires so each searches a different slice of \
+   the data. If it has a "packages" parameter, assign different \
+   package lists.
+
+   The partition emerges from your reasoning about the engagement. \
+   What dimensions of the data would reveal different kinds of \
+   findings? Assign each hire a dimension.
+
+G. What scope description do they get? Describe what this hire \
+   investigates in terms that ground to their data assignment. The \
+   scope should reference the data they'll actually see.
+
+H. What budget do they get? Each hire must receive at least \
+   ${leaf_viable_envelope:.2f}. Before allocating, check: does the \
+   scope you authored actually warrant this budget? If you're giving \
+   $1 of budget for a single specific question that a worker can \
+   answer in one pass, either broaden the scope (more dimensions to \
+   cover) or reduce the budget. Mismatched scope-and-budget means \
+   workers will under-utilize — they'll spend $0.15 on a $1 budget \
+   because the work only needs one pass. Match the budget to the \
+   work you're actually asking for.
 
 Finally, author a SYNTHESIS ROLE. After your hires return, their findings \
 will be cross-referenced and combined. The synthesis role defines what \
@@ -1673,20 +1711,23 @@ Return JSON:
         {{
             "role": {{
                 "name": "role name — kind of cognition, not topic label",
-                "success_bar": "what good output looks like for this role — specific, judgeable",
-                "heuristic": "posture for ambiguous moments + continuation guidance"
+                "mission": "what excellent work looks like — the aspiration, not the floor",
+                "success_bar": "minimum acceptable output — specific, judgeable, concrete enough to fail against",
+                "heuristic": "posture for ambiguous moments"
             }},
             "justification": "what dimension of the work this hire covers and why it requires distinct cognition",
-            "scope_description": "what this hire investigates — non-overlapping with siblings",
+            "data_assignment": "what subset of the data this hire examines and why — the reasoning behind the filter",
+            "scope_description": "what this hire investigates — grounded to the data they will actually see",
             "purpose": "why this hire is needed and what you need from them",
-            "data_filter": {{}},
+            "data_filter": {{"keyword": "a specific search term for this hire's slice of the data — MUST differ between hires"}},
             "parent_context": "the evidence or reasoning that motivated this hire",
             "budget": 0.00
         }}
     ],
     "synthesis_role": {{
         "name": "synthesis role name",
-        "success_bar": "what good cross-referencing looks like — what patterns to surface, what to filter",
+        "mission": "what excellent synthesis looks like for this engagement",
+        "success_bar": "minimum acceptable cross-referencing — what patterns to surface, what to filter",
         "heuristic": "posture for ambiguous moments in synthesis"
     }},
     "self_evaluation": {{
@@ -1724,6 +1765,180 @@ NODE_FORCE_RESOLVE_OVERRIDE_V2 = """\
 OVERRIDE: You are deep in a single-hire chain ({chain_depth} levels). \
 You MUST investigate directly. Do not hire. Set hire_directives to empty. \
 Produce observations from the data in front of you.
+"""
+
+
+WORKER_REASSESSMENT_PROMPT_V2 = """\
+You have produced initial observations. Before resolving, re-run your \
+formation assessment with the information you now have.
+
+YOUR ROLE:
+Name: {role_name}
+Mission: {role_mission}
+Bar (minimum acceptable): {role_bar}
+
+YOUR FORMATION ASSESSMENT:
+{formation_summary}
+
+YOUR INITIAL OBSERVATIONS ({observation_count}):
+{observations_summary}
+
+BUDGET:
+Allocated: ${budget_allocated:.2f}
+Spent so far: ${budget_spent:.3f}
+Remaining: ${budget_remaining:.3f}
+Minimum hire envelope: ${leaf_viable_envelope:.2f}
+
+---
+
+RE-ASSESSMENT
+
+You ran the floor/ceiling tests at formation with limited information. \
+Now you have your actual observations. Re-run those tests with what you \
+know now.
+
+1. WHAT CHANGED: At formation you assessed scope, capacity, and bar \
+   depth. Now that you've investigated, what do your observations reveal \
+   that you didn't know then? Be specific — name what surprised you, \
+   what was bigger than expected, what dimensions emerged.
+
+2. FLOOR TEST (re-run): Given what you now know, would the overhead of \
+   authoring roles + briefing + reviewing hires EXCEED the cost of \
+   continuing this work yourself? If you can do the remaining work in \
+   one more reasoning turn, delegation overhead exceeds direct work. \
+   If the remaining work has multiple dimensions each requiring distinct \
+   analytical methods, the overhead is justified.
+
+3. CEILING TEST (re-run): Given what you now know, can you usefully \
+   cover what remains of this scope at the depth your MISSION requires \
+   within your own reasoning capacity? Consider: how many distinct \
+   threads did your observations open? Do they require different \
+   analytical methods from each other? Can one more pass of YOUR \
+   cognition cover them, or do they genuinely need specialists?
+
+4. MISSION CHECK: Do your current observations meet your mission's \
+   standard? Not the bar — the mission. Would resolving now mean you \
+   produced your best work, or are there reachable improvements?
+
+The outcome follows from the test results:
+
+- If your work meets the mission standard, or remaining budget is \
+  below $0.15: RESOLVE. The work is done or budget-constrained.
+
+- If both tests pass (delegation overhead exceeds benefit, and your \
+  capacity covers the remaining scope) but mission warrants more \
+  depth: INVESTIGATE_FURTHER. Take another reasoning turn to push \
+  your observations deeper.
+
+- If the floor test NOW fails (delegation is justified because scope \
+  has distinct dimensions) OR the ceiling test NOW fails (scope at \
+  required depth exceeds your capacity): HIRE. Use the same \
+  role-authoring machinery to design a team for the remaining work. \
+  This requires at least ${min_hire_budget:.2f} remaining budget.
+
+- If you have honestly examined the data, produced observations, and \
+  further probing would yield variations on what you already found \
+  rather than genuinely new patterns: RESOLVE as exhausted. This is \
+  not failure — it is honest assessment that this scope, at this \
+  depth, with this data, has been adequately examined. Exhaustion \
+  requires grounding: name what you examined, what patterns emerged, \
+  why further work yields diminishing returns, and what would change \
+  your conclusion (different data, different scope, different method).
+
+Return JSON:
+{{
+    "reassessment": {{
+        "what_changed": "specific new information from observations that formation didn't have",
+        "floor_test": {{
+            "delegation_overhead_justified": false,
+            "reasoning": "would authoring + briefing + reviewing exceed doing the work directly"
+        }},
+        "ceiling_test": {{
+            "scope_exceeds_capacity": false,
+            "reasoning": "can one more pass of your cognition cover remaining scope at mission depth"
+        }},
+        "mission_met": false,
+        "mission_gap": "what specifically would improve the output",
+        "exhaustion_assessment": {{
+            "data_exhausted": false,
+            "what_was_examined": "specific data and methods applied",
+            "patterns_found": "what emerged from examination",
+            "why_no_further": "why more probing yields diminishing returns, if applicable",
+            "what_would_change_conclusion": "different data, scope, or method that might yield more"
+        }}
+    }},
+    "decision": "RESOLVE | INVESTIGATE_FURTHER | HIRE",
+    "decision_reasoning": "which test results led to this decision"
+}}
+
+Respond ONLY with valid JSON, no other text.
+"""
+
+
+WORKER_EXTENSION_PROMPT_V2 = """\
+You are extending your investigation. You produced initial observations \
+and reassessed that they need to be pushed deeper.
+
+YOUR ROLE:
+Name: {role_name}
+Mission: {role_mission}
+Bar (minimum acceptable): {role_bar}
+
+YOUR INITIAL OBSERVATIONS:
+{initial_observations}
+
+YOUR REASSESSMENT (why you're extending):
+{reassessment_reasoning}
+
+THREADS TO PUSH DEEPER:
+{extension_threads}
+
+DATA ({doc_count} items):
+{fetched_data}
+
+---
+
+Push your initial observations deeper. For each thread you identified:
+
+- Find additional evidence that strengthens or contradicts your initial \
+  observation
+- Test alternative explanations — is there a simpler reason for what \
+  you found?
+- Sharpen the framing — can you make the finding more specific, more \
+  grounded, more surprising?
+- Quantify what you couldn't quantify in the first pass
+
+Do NOT simply restate your initial observations with different words. \
+Each observation in your extension must add substantive new evidence \
+or analysis that wasn't in your initial pass.
+
+Return JSON:
+{{
+    "extended_observations": [
+        {{
+            "raw_evidence": "specific new data — not restated from initial observations",
+            "statistical_grounding": "what flagged this",
+            "local_hypothesis": "specific explanation",
+            "source": {{
+                "doc_id": "", "title": "", "agency": "", "date": "",
+                "section": "", "url": ""
+            }},
+            "observation_type": "type",
+            "confidence": 0.85,
+            "signal_strength": "data_originated_novel | data_originated_confirmatory",
+            "surprising_because": "expected vs actual",
+            "extends_initial": "which initial observation this deepens, or 'new'"
+        }}
+    ],
+    "self_evaluation": {{
+        "mission_progress": "how much closer to mission after extension",
+        "bar_met": true,
+        "evidence_quality": "high | medium | low",
+        "remaining_gaps": ["what still isn't covered after extension"]
+    }}
+}}
+
+Respond ONLY with valid JSON, no other text.
 """
 
 
@@ -1799,7 +2014,8 @@ Your hires have returned. You have ${budget_remaining:.2f} available.
 
 YOUR ROLE:
 Name: {role_name}
-Bar: {role_bar}
+Mission: {role_mission}
+Bar (minimum acceptable): {role_bar}
 
 YOUR ORIGINAL SCOPE:
 {scope_description}
@@ -1815,28 +2031,44 @@ HIRE REPORTS:
 
 ---
 
-STEP 1 — EVALUATE EACH HIRE AGAINST THEIR AUTHORED BAR
+STEP 1 — EVALUATE EACH HIRE
 
-For each hire, read the bar you wrote for them. Then read their output. \
-Your evaluation must map specifics to specifics — not assert a classification.
+For each hire, evaluate REASONING QUALITY. Budget consumed and observation \
+count are inputs to your evaluation, not the verdict. A hire that produced \
+4 grounded observations and concluded "the patterns I'm finding are well-documented; \
+deeper probing won't surface novel things" is doing the same quality of work \
+as a hire that produced 10 observations meeting a bar. Judge the reasoning, \
+not the volume.
 
-A. Quote the bar you authored. Then identify the specific elements in \
-   the hire's output that address or fail to address each requirement in \
-   the bar. Element by element, not in aggregate.
+THE REASONING-QUALITY CHECK:
+- Did the hire name specific things it examined? (specific packages, \
+  dimensions, patterns — not vague claims)
+- Do the observations include evidence and quantification, or are they \
+  generic assertions?
+- If the hire concluded exhaustion, did it articulate what was examined, \
+  what patterns emerged, why further work yields diminishing returns, and \
+  what would change the conclusion?
+- Does the reasoning trace show the hire engaging with the work, or going \
+  through motions?
 
-B. Classification (grounded in the mapping above):
-   - MET: Each bar element has a corresponding output element that clears it.
-   - POOR_REASONING: Specific bar elements are unmet, and the hire had the \
-     data to meet them. Name which elements and what the hire produced instead.
-   - WRONG_ROLE: The hire produced reasonable work that doesn't map to the bar, \
-     because the bar was misaligned with the territory. Name what the hire found \
-     that the bar didn't anticipate, and what bar element has no reasonable path \
-     to meeting given the actual data.
+Based on reasoning quality, classify each hire:
 
-A classification without specific element-to-element reasoning is not \
-trustworthy. If you cannot point to specific bar elements and specific \
-output elements, default to MET — do not classify poorly what you cannot \
-evaluate concretely.
+MET / COMMITTED: The hire produced grounded observations that clear the \
+bar, with real engagement evident in the reasoning. Budget consumed is \
+not relevant — a hire spending $0.20 of $1.00 with grounded reasoning \
+is COMMITTED.
+
+EXHAUSTED / COMMITTED: The hire engaged honestly with its scope and \
+concluded that further work isn't warranted, with grounded reasoning \
+about what was examined, what patterns emerged, why those patterns don't \
+warrant further work, and what would change the conclusion. This is a \
+first-class commitment outcome. Do NOT spawn continuation on this thread.
+
+POOR_REASONING / UNDERFIRED: The hire produced thin work with thin \
+reasoning. Vague observations, no specifics about what was examined, \
+claims of exhaustion without grounding, or claims of findings without \
+evidence. The distinguishing signal is reasoning quality, not budget \
+consumed or observation count. Spawn continuation to do the work properly.
 
 STEP 2 — DECIDE WHAT TO DO WITH YOUR REMAINING BUDGET
 
@@ -1850,28 +2082,49 @@ ARITHMETIC:
    estimate above. This is your available continuation budget.
 2. Given your average cost per hire (observable above), how many continuation \
    hires could you fund?
-3. Are there worthwhile threads from your hires that need genuinely different \
-   cognition? How many? Do they outnumber what you can fund?
-4. For each candidate continuation: does it need different cognition from what \
-   you already hired, or is it more of the same kind of work? Only fund \
-   genuinely different cognition.
+3. List each candidate continuation thread. For each one:
+   a. What specific analytical method or angle did the prior hire use?
+   b. What different analytical method or angle would investigate it further?
+   c. If you can name a different method, this thread requires different \
+      cognition and continuation is warranted.
+   Claiming threads "don't need different cognition" without naming the \
+   prior method and proposed different method for each thread is insufficient.
 
-If the arithmetic shows meaningful continuation budget AND worthwhile threads \
-requiring different cognition: CONTINUE. Fund them.
+MISSION CHECK: Given the mission this engagement is on, would resolving \
+here mean the engagement produced its best possible work? Or would you be \
+leaving better findings on the table with budget available to pursue them? \
+Or has the scope been honestly exhausted — the data examined, patterns \
+documented, further probing producing variations not new shapes?
 
-If the arithmetic shows budget but no threads requiring different cognition: \
-RESOLVE. Returning surplus is correct because the work is done.
+COMMITMENT-INFORMED CONTINUATION:
+- POOR_REASONING_UNDERFIRED hires: spawn continuation to do the work \
+  properly. The original hire didn't engage; the continuation should.
+- MET_COMMITTED hires with worthwhile threads: spawn continuation under \
+  a new role that takes those threads in a different analytical direction.
+- EXHAUSTED_COMMITTED hires: do NOT continue this line. The hire engaged \
+  and concluded honestly. Redirect budget to lines that can still yield.
 
-If the arithmetic shows insufficient budget for even one hire after downstream \
-reservation: RESOLVE. Cannot fund meaningful continuation.
+If arithmetic shows budget AND threads with different methods identified \
+AND those threads are NOT in areas where hires concluded grounded \
+exhaustion: CONTINUE. Fund them.
+
+If hires returned grounded exhaustion and remaining threads are in the \
+same exhausted areas: RESOLVE. Report honestly what was examined and what \
+would be needed to find different shapes (different data scope, expanded \
+corpus, different analytical methods).
+
+If arithmetic shows budget but genuinely no threads with different methods: \
+RESOLVE honestly.
+
+If arithmetic shows insufficient budget for even one hire: RESOLVE. Report: \
+"Resolving with work below mission standard because budget cannot sustain \
+further investigation" if mission is incomplete.
 
 Options:
-- CONTINUE: Arithmetic shows budget for continuation AND threads requiring \
-  genuinely different cognition exist. Fund them.
+- CONTINUE: Arithmetic shows budget AND threads with different methods exist.
 - REHIRE: A POOR_REASONING or WRONG_ROLE hire left valuable territory \
   uncovered AND the revised role is meaningfully different from the original.
-- RESOLVE: Arithmetic shows continuation is not warranted — either no budget \
-  after downstream, or no threads requiring different cognition.
+- RESOLVE: Arithmetic shows continuation is not warranted.
 
 STEP 3 — SYNTHESIZE
 
@@ -1888,10 +2141,17 @@ Return JSON:
             "bar_quoted": "the bar you wrote for this role",
             "bar_elements_met": ["specific bar element → specific output element that meets it"],
             "bar_elements_unmet": ["specific bar element → what was produced instead, or nothing"],
-            "classification": "MET | POOR_REASONING | WRONG_ROLE",
-            "classification_grounding": "which specific bar-to-output mappings justify this classification",
+            "reasoning_quality": "did the hire name specifics, provide evidence, show real engagement with the data",
+            "classification": "MET_COMMITTED | EXHAUSTED_COMMITTED | POOR_REASONING_UNDERFIRED",
+            "classification_grounding": "what in the reasoning trace supports this classification — cite specific evidence of engagement or specific gaps",
             "key_findings_to_integrate": ["findings that passed the bar"],
-            "worthwhile_threads": ["threads worth continuing"]
+            "worthwhile_threads": [
+                {{
+                    "thread": "what to investigate",
+                    "prior_method": "what analytical method the hire used to surface this",
+                    "proposed_different_method": "what different method would investigate further"
+                }}
+            ]
         }}
     ],
     "continuation_decision": {{
@@ -1902,14 +2162,15 @@ Return JSON:
             "available_for_continuation": 0.00,
             "avg_hire_cost": 0.00,
             "affordable_hires": 0,
-            "worthwhile_threads_count": 0,
-            "threads_needing_different_cognition": 0
+            "threads_with_different_methods": 0
         }},
-        "reasoning": "grounded in arithmetic above: what the numbers show and what you decided",
+        "mission_assessment": "is the mission complete, incomplete with budget, or incomplete without budget",
+        "reasoning": "grounded in arithmetic and mission assessment — what the numbers show, what the mission demands, and what you decided",
         "continuation_directives": [
             {{
                 "role": {{
                     "name": "role for continuation hire",
+                    "mission": "what excellent work looks like — if following an UNDERFIRED hire, explicitly state to push further",
                     "success_bar": "bar for continuation",
                     "heuristic": "heuristic for continuation"
                 }},

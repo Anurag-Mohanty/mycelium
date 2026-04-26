@@ -46,11 +46,12 @@ class Briefing:
 class RoleDefinition:
     """What a node is, not just what it does.
 
-    Authored by the hiring manager at spawn time. The role's bar is
-    the primary judgment criterion — closer to the work than the charter.
+    Authored by the hiring manager at spawn time. Mission is the aspiration;
+    bar is the floor. The worker reasons against mission, checks against bar.
     """
     name: str = ""              # what this role is called
-    success_bar: str = ""       # what good output specifically looks like
+    mission: str = ""           # what excellent work looks like — direction, not checkbox
+    success_bar: str = ""       # minimum acceptable output — below this is failure
     heuristic: str = ""         # posture for ambiguous moments
 
 

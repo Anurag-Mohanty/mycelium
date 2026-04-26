@@ -641,6 +641,11 @@ class Orchestrator:
             # Author a role for this deep-dive from the selection context
             dd_role = RoleDefinition(
                 name="deep-dive investigator",
+                mission=(
+                    f"Produce the definitive account of this finding — trace every "
+                    f"connection, quantify every impact, name every entity involved: "
+                    f"{desc[:150]}"
+                ),
                 success_bar=(
                     f"Trace this specific finding to its full extent with named entities "
                     f"and exact figures: {desc[:200]}"
@@ -1430,6 +1435,17 @@ Respond ONLY with a JSON array."""}],
         exploration_budget = self.budget.total * self.budget.phase_limits["exploration"]
         first_role = RoleDefinition(
             name="engagement lead",
+            mission=(
+                "Produce the most insightful investigation this budget can yield. "
+                "Build a team that uncovers what nobody else has noticed — hidden "
+                "structural relationships, unexpected failure modes, patterns that "
+                "would make a domain expert say 'I didn't know that.' Engage fully "
+                "with every line of inquiry. When a line is exhausted — the data "
+                "examined, patterns documented, further probing would yield variations "
+                "not new shapes — conclude honestly and redirect budget to lines that "
+                "can still yield. Excellence is thorough engagement, not exhaustive "
+                "continuation."
+            ),
             success_bar=(
                 "Design and staff an organization that produces findings meeting "
                 "the charter's standards. Success means: the team you hire covers "
@@ -1635,10 +1651,13 @@ Respond ONLY with a JSON array."""}],
         total_obs = sum(d["output"]["observations_count"] for d in all_diags)
 
         full_path = self.run_dir / "full_diagnostic.txt"
-        with open(full_path, "w") as f:
-            f.write(f"{'='*70}\n")
-            f.write(f"RUN {self.run_id} — FULL NODE DIAGNOSTIC\n")
-            f.write(f"{'='*70}\n")
+        is_first_write = not full_path.exists() or full_path.stat().st_size == 0
+        with open(full_path, "a") as f:
+            if is_first_write:
+                f.write(f"{'='*70}\n")
+                f.write(f"RUN {self.run_id} — FULL NODE DIAGNOSTIC\n")
+                f.write(f"{'='*70}\n\n")
+            f.write(f"--- Phase: {root_worker.pos.split('.')[0] if '.' in root_worker.pos else root_worker.pos} ---\n")
             f.write(f"Nodes: {total} | Zero-obs: {zero_obs} | Hired: {hired}\n")
             f.write(f"Total observations: {total_obs}\n\n")
 
