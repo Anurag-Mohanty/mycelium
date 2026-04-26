@@ -1840,33 +1840,38 @@ evaluate concretely.
 
 STEP 2 — DECIDE WHAT TO DO WITH YOUR REMAINING BUDGET
 
-You have ${budget_remaining:.2f} remaining. Downstream phases (synthesis, \
-validation, impact analysis, report) still need budget to run. Every dollar \
-you spend on continuation is a dollar those phases cannot use. Default to \
-returning surplus unless continuation is clearly the higher-value move.
+{cost_context}
 
-Before choosing CONTINUE or REHIRE, apply the economics test:
+Run the capacity-vs-scope arithmetic with the data above. This is not a \
+default — it is concrete reasoning with observable numbers.
 
-- Authoring a continuation role, spawning a hire, and reviewing their work \
-  at Turn 2 costs real budget. Is the expected value of the continuation \
-  higher than the cost of setting it up?
-- Does the continuation need a genuinely different kind of cognition from \
-  what you already hired? If the thread is "more of the same kind of work \
-  on a different slice," that is not a continuation — it is the same work \
-  you could extend yourself or that your existing hires partially covered.
-- Could you address the thread yourself within your remaining envelope, \
-  without the overhead of hiring? If yes, do it yourself or note it as \
-  an unresolved thread for downstream phases.
+ARITHMETIC:
+1. How much budget remains after reserving for downstream phases? Use the \
+   estimate above. This is your available continuation budget.
+2. Given your average cost per hire (observable above), how many continuation \
+   hires could you fund?
+3. Are there worthwhile threads from your hires that need genuinely different \
+   cognition? How many? Do they outnumber what you can fund?
+4. For each candidate continuation: does it need different cognition from what \
+   you already hired, or is it more of the same kind of work? Only fund \
+   genuinely different cognition.
+
+If the arithmetic shows meaningful continuation budget AND worthwhile threads \
+requiring different cognition: CONTINUE. Fund them.
+
+If the arithmetic shows budget but no threads requiring different cognition: \
+RESOLVE. Returning surplus is correct because the work is done.
+
+If the arithmetic shows insufficient budget for even one hire after downstream \
+reservation: RESOLVE. Cannot fund meaningful continuation.
 
 Options:
-- CONTINUE: The thread needs genuinely different cognition, the cost of \
-  setting up a hire is justified by the expected value, and the remaining \
-  budget can absorb the cost without starving downstream phases.
+- CONTINUE: Arithmetic shows budget for continuation AND threads requiring \
+  genuinely different cognition exist. Fund them.
 - REHIRE: A POOR_REASONING or WRONG_ROLE hire left valuable territory \
   uncovered AND the revised role is meaningfully different from the original.
-- RESOLVE: Default. Return surplus to the pool for downstream phases. \
-  Note worthwhile threads as unresolved — they may be addressed by \
-  synthesis, deep-dives, or future engagement rather than more hiring.
+- RESOLVE: Arithmetic shows continuation is not warranted — either no budget \
+  after downstream, or no threads requiring different cognition.
 
 STEP 3 — SYNTHESIZE
 
@@ -1891,7 +1896,16 @@ Return JSON:
     ],
     "continuation_decision": {{
         "action": "CONTINUE | REHIRE | RESOLVE",
-        "reasoning": "grounded: specific threads, specific cognition needed, specific downstream budget consideration",
+        "arithmetic": {{
+            "remaining_budget": 0.00,
+            "downstream_reservation": 0.00,
+            "available_for_continuation": 0.00,
+            "avg_hire_cost": 0.00,
+            "affordable_hires": 0,
+            "worthwhile_threads_count": 0,
+            "threads_needing_different_cognition": 0
+        }},
+        "reasoning": "grounded in arithmetic above: what the numbers show and what you decided",
         "continuation_directives": [
             {{
                 "role": {{

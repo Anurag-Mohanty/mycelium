@@ -295,6 +295,7 @@ class RoleWorkerNode:
                 f"AUTHORED BAR: {role.success_bar}\n"
                 f"AUTHORED HEURISTIC: {role.heuristic}\n"
                 f"SCOPE: {child.directive.scope.description[:200]}\n"
+                f"ACTUAL COST: ${child.spent:.3f} (of ${child.budget:.3f} allocated)\n"
                 f"OBSERVATIONS ({len(child_obs)}):\n{obs_text}"
                 f"SELF-EVALUATION: bar_met={child_metrics.get('bar_met', '?')}, "
                 f"quality={child_metrics.get('evidence_quality', '?')}\n"
@@ -314,6 +315,33 @@ class RoleWorkerNode:
 
         remaining = max(0, self.budget - self.spent)
 
+        # Compute observable cost data for the manager
+        children_costs = [c.spent for c in self.child_workers]
+        avg_hire_cost = sum(children_costs) / max(1, len(children_costs))
+        total_children_cost = sum(children_costs)
+        own_cost = self.spent - total_children_cost  # formation + review overhead
+
+        # Downstream phase estimate from pool if available
+        downstream_estimate = 0.50  # conservative default
+        if self._budget_pool:
+            pool_spent = self._budget_pool.spent
+            exploration_spent = self._budget_pool.phase_spent.get("exploration", 0)
+            non_exploration_spent = pool_spent - exploration_spent
+            if non_exploration_spent > 0.01:
+                downstream_estimate = non_exploration_spent  # use actual if available
+
+        cost_context = (
+            f"OBSERVABLE COST DATA:\n"
+            f"  Your formation cost: ${own_cost:.3f}\n"
+            f"  Hires completed: {len(children_costs)}\n"
+            f"  Average cost per hire: ${avg_hire_cost:.3f}\n"
+            f"  Total spent on hires: ${total_children_cost:.3f}\n"
+            f"  Downstream phases estimate: ${downstream_estimate:.2f} "
+            f"(synthesis + validation + deep-dive + impact + report)\n"
+            f"  Budget after downstream: ${max(0, remaining - downstream_estimate):.2f} "
+            f"available for continuation\n"
+        )
+
         import datetime
         prompt = _prompts.MANAGER_TURN2_PROMPT_V2.format(
             budget_remaining=remaining,
@@ -322,6 +350,7 @@ class RoleWorkerNode:
             scope_description=self.directive.scope.description[:500],
             workspace_context=workspace_context,
             hire_reports=hire_reports,
+            cost_context=cost_context,
         )
 
         # Budget gate
