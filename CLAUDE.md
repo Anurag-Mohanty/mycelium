@@ -71,7 +71,15 @@ If you find yourself writing `if field == "downloads"` or `if source == "npm"` a
 ## Architecture
 
 ### Pipeline
-Catalog (free) → Genesis → Planner → Explore (parallel) → Synthesis → Deep-dive → Validate → Significance → Impact → Report → Metrics
+Catalog (free) → Genesis → EQUIP → Explore (parallel) → Synthesis → Deep-dive → Validate → Significance → Impact → Report → Metrics
+
+### MECE Partition Gate
+At every parent→child boundary, the system verifies child partitions tile the parent's scope:
+- **Completeness**: union of child partitions = parent scope (no gaps)
+- **Exclusivity**: intersection of any two children = empty (no overlaps)
+- **Shape**: every partition translates to a SQL filter (no analytical lenses)
+
+If any check fails and `--partition-gate on`, the run halts with a diagnostic. The gate prevents the pipeline from silently collapsing to sample-based analysis.
 
 ### Node Accountability
 Every node operates like an employee:
@@ -81,17 +89,25 @@ Every node operates like an employee:
 - **Parent reviews** — Turn 2 evaluates whether children delivered what was asked
 - **Metrics tracked** — budget efficiency, purpose alignment, evidence quality
 
+### EQUIP (Workspace Prep)
+Runs before exploration. Analyzes the catalog, computes field distributions, and writes a SKILL.md with:
+- Corpus orientation and schema
+- **Partitioning Guide** — field distributions with percentiles, segment counts, and ready-to-use partition schemes
+- Partition rules (partitions vs lenses distinction)
+
 ### Catalog Step (AnalyticalSurvey)
 Pure Python, zero LLM cost. Runs 10 independent techniques (basic stats, isolation forest, TF-IDF, DBSCAN, entity concentration, graph analysis, temporal, keywords, temporal text comparison, peer divergence). Produces numbered INVESTIGATION TARGETS with full evidence.
 
 ### Exploration
-Every node runs: Survey → Orient → Hypothesize → Assess Coverage → Produce
+Engagement lead partitions the corpus into non-overlapping slices using record field filters (e.g., `dependency_count = 0`, `maintainer_count >= 2`). Each worker receives a distinct slice. Workers analyze their slice directly or sub-partition further. The MECE gate enforces tiling at every boundary.
 
-Nodes analyze data directly first. Decompose only for specific evidence-driven threads that need deeper investigation. Budget controls depth, not hardcoded limits.
+### Partition-Based Data Routing
+The engagement lead authors partitions (data filters), not lenses (analytical questions). EQUIP's translator converts natural-language partition descriptions to SQL against the enriched catalog. Workers receive records from their partition.
 
 ### Budget Management
 - Shared atomic BudgetPool prevents parallel overspend
-- Exploration has a hard cap (50% of total)
+- Exploration has a hard cap (85% of total in role-authoring path)
+- Downstream floor: min($0.30, total * 6%) reserved for synthesis/validation/impact
 - Checked before every LLM call
 - Remaining budget flows to synthesis, validation, and impact
 
@@ -106,22 +122,29 @@ Nodes analyze data directly first. Decompose only for specific evidence-driven t
 
 ## Key Files
 
-- `run.py` — CLI entry point (--source, --budget, --visualize, --playback)
-- `mycelium/schemas.py` — all data structures (Directive with purpose, Observation with evidence packets, BudgetPool)
-- `mycelium/prompts.py` — all LLM prompts (centralized, single source of truth)
+- `run.py` — CLI entry point (--source, --budget, --visualize, --playback, --partition-gate)
+- `mycelium/schemas.py` — all data structures (Directive with partition, Observation with evidence packets, BudgetPool)
+- `mycelium/prompts_v2.py` — all LLM prompts for role-authoring path (centralized, single source of truth)
+- `mycelium/prompts.py` — legacy v1 prompts
 - `mycelium/survey.py` — AnalyticalSurvey (10 techniques, domain-agnostic)
-- `mycelium/genesis.py` — corpus shape survey + lens generation
-- `mycelium/planner.py` — budget-aware exploration strategy
-- `mycelium/worker.py` — WorkerNode (persistent multi-turn agent with diagnostics)
-- `mycelium/node.py` — single-call reasoning primitive (legacy, used by old explore path)
+- `mycelium/genesis.py` — charter generation from corpus metadata
+- `mycelium/equip.py` — EQUIP workspace prep (field distributions, partition guide, SKILL.md)
+- `mycelium/translator.py` — converts natural-language partition descriptions to SQL
+- `mycelium/partition_gate.py` — MECE enforcement at every parent→child boundary
+- `mycelium/worker_v2.py` — RoleWorkerNode (unified node: investigate, hire, reassess, Turn 2)
+- `mycelium/worker.py` — legacy WorkerNode
+- `mycelium/node.py` — legacy single-call reasoning primitive
 - `mycelium/orchestrator.py` — full pipeline coordinator + run metrics + diagnostics
+- `mycelium/bulletin_board.py` — lateral comms (post/pull between sibling nodes)
 - `mycelium/synthesizer.py` — cross-referencing attention mechanism
-- `mycelium/validator.py` — skeptical review (factual vs inferential distinction)
+- `mycelium/validator.py` — skeptical review (factual vs inferential + charter-shape check)
 - `mycelium/significance.py` — novelty + actionability scoring
 - `mycelium/impact.py` — real-world impact assessment
 - `mycelium/reporter.py` — five-tier markdown report
 - `mycelium/events.py` — WebSocket + events.jsonl recording
 - `mycelium/knowledge_graph.py` — SQLite-backed persistent graph
+- `mycelium/deliverable.py` — deliverable.db generation with embeddings
+- `mycelium/obsidian_export.py` — Obsidian vault export (per-entity markdown with wiki-links)
 - `visualizer.html` — D3.js real-time tree with reasoning display + playback
 
 ## Data Source Connector Pattern
@@ -154,17 +177,20 @@ Current connectors:
 ```bash
 export ANTHROPIC_API_KEY=your_key
 
-# Explore with live visualizer
-python3 run.py --source sec --budget 10 --visualize
+# Explore with live visualizer and MECE gate
+python3 run.py --source npm --budget 10 --prompts v2 --visualize
 
 # Headless run
-python3 run.py --source npm --budget 10
+python3 run.py --source npm --budget 5 --prompts v2
+
+# Gate off (instrumentation only, no halt)
+python3 run.py --source npm --budget 5 --prompts v2 --partition-gate off
 
 # Replay a recorded run
 python3 run.py --playback output/{run_id}/events.jsonl --speed 10
 ```
 
-Output goes to `output/{run_id}/` with `report.md`, `metrics.json`, `tree.json`, `events.jsonl`, `knowledge_graph.json`, per-node `nodes/` and `diagnostics/`.
+Output goes to `output/{run_id}/` with `report.md`, `metrics.json`, `tree.json`, `events.jsonl`, `knowledge_graph.json`, per-node `nodes/`, `diagnostics/`, `transcripts/`, and `translations/`.
 
 ## Output Structure
 
@@ -172,23 +198,29 @@ Each run produces:
 - `report.md` — five-tier findings (Common Knowledge → Cross-Cutting Patterns)
 - `metrics.json` — cost, quality, efficiency, token, coverage metrics
 - `diagnostics/` — per-node input/output logs showing evidence flow
+- `diagnostics/partition_gate/` — MECE gate results per parent node
+- `translations/` — SQL translations of partition descriptions
+- `transcripts/` — per-node markdown reasoning traces
+- `workspace/` — charter.md, SKILL.md (shared context)
 - `catalog/run_history.jsonl` — cumulative run-over-run comparison
 
 ## Cost Model
 
 - Sonnet: $3/M input, $15/M output tokens
-- Extended thinking: 5000 token budget per node
-- Typical $5 run: ~30 nodes, ~60 observations, depth 3-4
-- Typical $10 run: ~45 nodes, ~180 observations, depth 4+
+- Extended thinking: 8000 token budget per node
+- Typical $1 run: ~5 nodes, ~26 observations, depth 1 (partition gate test)
+- Typical $5 run: ~20 nodes, ~100 observations, depth 2-3
+- Typical $10 run: ~45 nodes, ~180 observations, depth 3-4
 - Run metrics track cost per observation, cost per validated finding, budget waste
 
 ## Conventions
 
-- All prompts live in `prompts.py` — never inline prompts elsewhere
+- All prompts live in `prompts_v2.py` — never inline prompts elsewhere
 - Every observation must be an evidence packet with specific data citations
-- Node reasoning logged to `output/{run_id}/nodes/` for transparency
+- Node reasoning logged to `output/{run_id}/nodes/` and `transcripts/` for transparency
 - All events recorded to `events.jsonl` for playback
 - Anti-spin: single-child test, chain test, value test
 - Chain circuit breaker: MAX_CHAIN_DEPTH=8 (the ONE hardcoded safety check)
+- MECE partition gate: enforces corpus tiling at every parent→child boundary
 - No domain-specific logic outside data source connectors
 - Enrichment caches to `catalog/` — don't re-fetch what's already downloaded

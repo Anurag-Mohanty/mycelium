@@ -279,11 +279,13 @@ Wait for all hires to return
 TURN 2: Evaluate each hire against authored bar
 ```
 
-#### 3.4.1 Data Partitioning
+#### 3.4.1 Data Partitioning (MECE)
 
-This is critical: each hire MUST receive a different `data_filter` so they examine different records. The filter controls what the data source API returns. If every hire gets the same filter, they all see the same 100 records and produce convergent findings regardless of role differences.
+This is critical: each hire MUST receive a different partition — a filter condition over record fields that selects a non-overlapping slice of the corpus. The engagement lead's primary job is authoring partitions that tile the corpus, not choosing what to investigate.
 
-The manager looks at the data source's filter schema and assigns different values to different hires. For example, if the schema has a "keyword" parameter, different hires get different keywords so each searches a different slice of the data.
+Partitions are defined by record attributes: `maintainer_count = 1`, `dependency_count >= 6 AND dependency_count <= 25`, `created < '2020-01-01'`. The EQUIP workspace provides field distributions so the engagement lead can pick natural break points.
+
+The MECE partition gate verifies every partition set before children execute. If partitions overlap, leave gaps, or can't be translated to filters, the run halts.
 
 #### 3.4.2 Budget Allocation to Hires
 
@@ -440,24 +442,55 @@ The first node in the exploration tree is the **engagement lead**. It has a syst
 
 The engagement lead receives the entire charter as its scope description and the full exploration budget (85% of total). It is expected to hire, not investigate directly, because the scope is too broad for one pass.
 
-### 4.7 Data Partitioning
+### 4.7 Data Partitioning (MECE)
 
-Each hire receives a different `data_filter` to examine different records. The data source's `filter_schema()` describes what parameters are available.
+The engagement lead partitions the corpus into non-overlapping slices that together cover every record. Each hire receives a different partition — a filter condition over record fields.
 
-For example, with the npm registry:
+**Partitions** are data slices defined by field values:
+- `dependency_count = 0` (38,056 records)
+- `dependency_count >= 1 AND dependency_count <= 5` (47,734 records)
+- `dependency_count >= 6 AND dependency_count <= 25` (13,406 records)
+- `dependency_count >= 26` (1,530 records)
 
-```json
-// Hire 1: Supply-chain analyst
-{"keyword": "express middleware"}
+These tile the corpus: every record is in exactly one partition.
 
-// Hire 2: Dependency graph analyst
-{"packages": ["lodash", "axios", "moment"]}
+**Lenses** are analytical questions (NOT partitions):
+- "coordination patterns" — applies to any record, can't be filtered
+- "temporal anomalies" — analytical concept, not a data attribute
 
-// Hire 3: Ecosystem dynamics analyst
-{"keyword": "typescript compiler"}
-```
+The engagement lead authors partitions. Workers apply lenses within their partition.
 
-The partition emerges from the manager's reasoning about the engagement -- what dimensions of the data would reveal different kinds of findings.
+### 4.7.1 EQUIP Workspace Prep
+
+Before exploration, EQUIP analyzes the catalog and writes a SKILL.md containing:
+- **Schema** — field names, types, ranges, sample values
+- **Partitioning Guide** — field distributions with percentiles and segment counts at natural break points, plus 3-5 ready-to-use partition schemes
+- **Partition Rules** — explicit distinction between partitions (filter conditions) and lenses (analytical questions)
+
+The engagement lead reads SKILL.md and uses the field distributions to choose partition dimensions and break points.
+
+### 4.7.2 EQUIP Translator
+
+The translator converts natural-language partition descriptions to SQL:
+
+1. **Author SQL** — LLM generates SQL from partition description + schema context
+2. **Schema check** — validates all column names exist
+3. **Execute** — runs SQL against the enriched catalog SQLite DB
+4. **Return** — records + SQL + interpretation (no value revision)
+
+The translator is pure plumbing. It does not revise filter values based on result count. If a partition returns 0 records, that's information for the engagement lead, not a problem for the translator to fix.
+
+### 4.7.3 MECE Partition Gate
+
+At every parent→child boundary where a node hires, the partition gate verifies:
+
+1. **Shape check** — each child's partition translates to SQL (not a lens)
+2. **Exclusivity check** — no two children's record sets overlap
+3. **Completeness check** — union of children covers the parent's scope
+
+If any check fails and `--partition-gate on` (default), the run halts with a diagnostic at `diagnostics/partition_gate/{node_id}.json`. The diagnostic names which check failed, by how much, and gives examples.
+
+The gate fires recursively — if a worker sub-partitions its slice, the gate enforces MECE at that boundary too.
 
 ### 4.8 Observations: Evidence Packets
 
@@ -1465,6 +1498,7 @@ python3 run.py --visualize
 | `--playback` | string | None | Path to `events.jsonl` file for replay. |
 | `--speed` | int | 10 | Playback speed multiplier. |
 | `--prompts` | choice | `v1` | Prompt version: `v1` (legacy) or `v2` (role-authoring path). |
+| `--partition-gate` | choice | `on` | MECE partition gate: `on` (halt on failure) or `off` (instrumentation only). |
 
 ### 11.4 Available Data Sources
 

@@ -73,6 +73,12 @@ Examples:
                         help="Playback speed multiplier (default: 10)")
     parser.add_argument("--prompts", choices=["v1", "v2"], default="v1",
                         help="Prompt version to use (default: v1)")
+    parser.add_argument("--deliverable", choices=["filesystem", "mcp"], default="filesystem",
+                        help="Deliverable connector (default: filesystem)")
+    parser.add_argument("--obsidian", action=argparse.BooleanOptionalAction, default=True,
+                        help="Generate Obsidian vault after run (default: True)")
+    parser.add_argument("--partition-gate", choices=["on", "off"], default="on",
+                        help="MECE partition gate: halt on bad partitions (default: on)")
     return parser.parse_args()
 
 
@@ -287,7 +293,7 @@ async def main():
     # Query mode — query existing knowledge graph, no exploration
     if args.query:
         from mycelium.knowledge_graph import KnowledgeGraph
-        kg_path = Path(args.output_dir) / "knowledge.db"
+        kg_path = Path("knowledge.db")
         if not kg_path.exists():
             print(f"ERROR: No knowledge graph found at {kg_path}")
             print("Run an exploration first to build the knowledge graph.")
@@ -463,6 +469,9 @@ async def main():
             output_dir=args.output_dir,
             hints=args.hint,
             visualize=args.visualize,
+            deliverable=args.deliverable,
+            obsidian=args.obsidian,
+            partition_gate=args.partition_gate,
         )
 
         exploration_data = await orchestrator.explore()

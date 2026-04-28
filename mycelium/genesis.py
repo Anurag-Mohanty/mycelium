@@ -85,7 +85,7 @@ async def run_genesis(data_source, hints: list[str] = None,
     client = anthropic.Anthropic()
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=2000,
+        max_tokens=3000,
         messages=[{"role": "user", "content": prompt}],
     )
 

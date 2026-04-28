@@ -1325,66 +1325,63 @@ TOTAL BUDGET: ${budget:.2f}
 YOUR TASK: Write the ORGANIZATIONAL CHARTER for this investigation.
 
 The charter is your directive to the entire organization. Every investigator \
-will read it. It sets purpose, standards, and stakes. Write it in your voice \
-as the leader — not as a report, not as a description of the data, but as a \
-directive that tells your team what you expect from them.
+will read it at every decision point. Write it in your voice as the leader.
 
-The charter must cover:
+The charter MUST have exactly four sections with these exact headers:
 
-1. WHAT WE ARE INVESTIGATING AND WHY IT MATTERS. Frame the corpus and the \
-mission. Not "this dataset contains 100K packages" but "we have been given \
-access to the complete dependency graph of the modern software ecosystem — \
-every package, every maintainer, every version. Our job is to find what \
-nobody else has noticed."
+## MISSION
 
-2. WHAT IS ALREADY KNOWN. Incorporate the briefing content. Structure this as \
-a list of CATEGORIES of known patterns, with specific examples illustrating each. \
-Workers will check their findings against these categories — if a finding matches \
-the SHAPE of a known category (even with different specific entities), it's not novel. \
-\
-Format: state the category first, then give one or two concrete examples. \
-Example: "Single-maintainer concentration in critical packages (lodash/jdalton, \
-axios/jasonsaayman)" — the category is "single-maintainer concentration in \
-critical packages." A worker finding that express has one maintainer matches \
-this category and should be suppressed, even though express wasn't named. \
-\
-The goal is NOT to enumerate every known entity. It's to name the SHAPES of \
-knowledge so workers can recognize when their finding is a new instance of a \
-known shape versus a genuinely new shape.
+Frame the corpus and what we're investigating. Not "this dataset contains \
+100K packages" but "we have been given access to the complete dependency \
+graph of the modern software ecosystem." State what we're looking for and \
+why it matters. State the stakes — what's the cost of missing something?
 
-3. WHAT IMPRESSES US AND WHAT DOESN'T. Define the quality bar. What kind of \
-finding would make leadership say "we didn't know that"? What kind would make \
-them say "obvious"? Be concrete about the LEVEL OF SPECIFICITY you demand — \
-named entities, exact numbers, traceable evidence. But do NOT constrain the \
-KIND of novelty. Surprising findings can be about hidden vulnerabilities, \
-but they can equally be about ecosystem dynamics, adoption patterns, community \
-behavior, architectural anomalies, economic structures, or any other shape of \
-hidden structure that emerges from the data. \
-Generic category-level observations are not impressive ("many packages have \
-single maintainers"). Specific discoveries with evidence ARE impressive, \
-regardless of what dimension they're on — a hidden supply-chain chokepoint, \
-a surprising adoption dynamic between competing frameworks, an unusual \
-architectural pattern that reveals how the ecosystem actually evolves, a \
-download flow anomaly that exposes how packages actually get used vs how \
-they're marketed. The test is: would a knowledgeable practitioner say \
-"I didn't know that"? Not: "does this fit a particular category of finding?"
+## EXCLUSIONS
 
-4. WHAT THE STAKES ARE. Why does this investigation matter? What's the cost \
-of missing something? What would a great investigation enable that a mediocre \
-one wouldn't?
+This is the most important section. It defines what shapes of finding are \
+already known and must not be reproduced.
+
+For each excluded pattern, use this format:
+
+**<Category Name>**
+A finding fits this exclusion if its main claim reduces to: <describe the \
+claim shape as a structural pattern, not a specific phrase>
+Findings fit this exclusion regardless of surface phrasing. "<X> controls <Y>" \
+and "<Y> concentrated under <X>" are the same shape.
+What this does NOT exclude: <describe related questions that touch the same \
+topic but are genuinely different shapes>
+
+Incorporate the briefing content. Derive exclusion categories from what \
+domain practitioners already know. Each exclusion should describe a SHAPE \
+of reasoning that is considered obvious, not a list of entities. A worker \
+finding a new entity in an excluded shape is still producing excluded work.
+
+Include 8-12 exclusions covering the major known pattern shapes in this corpus.
+
+## QUALITY STANDARDS
+
+What kind of finding would make leadership say "we didn't know that"? \
+What kind would make them say "obvious"? Be concrete about specificity — \
+named entities, exact numbers, traceable evidence. But do NOT constrain \
+the KIND of novelty. The test is: would a knowledgeable practitioner say \
+"I didn't know that"?
+
+## CORPUS CONTEXT
+
+Brief description of the data available. What's cataloged, what's the \
+coverage, what dimensions the data contains. Keep short — EQUIP provides \
+the detailed schema separately.
 
 CONSTRAINTS:
-- Write in directive voice. You are addressing your team, not writing a report.
-- Do NOT list investigation areas or suggest where to look — that's the \
-program office's job.
-- Do NOT specify organizational structure — that's also the program office's job.
-- DO incorporate the statistical findings and briefing into your framing — \
-they inform what's already known and what gaps exist.
-- Keep it under 800 words. Your team reads this before every quality decision. \
-It needs to be memorable, not exhaustive.
+- Write in directive voice. You are addressing your team.
+- Do NOT list investigation areas or suggest where to look.
+- Do NOT specify organizational structure.
+- DO incorporate the statistical findings and briefing.
+- The EXCLUSIONS section should be the longest section — it does the most \
+work shaping what the team produces.
+- Keep the charter under 1200 words total.
 
-Respond with ONLY the charter text. No JSON. No preamble. No metadata. \
-Just the directive.
+Respond with ONLY the charter text. No JSON. No preamble. No metadata.
 """
 
 
@@ -1551,6 +1548,8 @@ Minimum hire envelope: ${leaf_viable_envelope:.2f}
 DATA ({doc_count} items):
 {fetched_data}
 
+{board_context}
+
 {force_resolve}
 
 ---
@@ -1633,23 +1632,38 @@ D. What is their bar? The minimum acceptable output — below this is \
 E. What is their heuristic? When they face an ambiguous decision during \
    their work, what posture should they take?
 
-F. What data do they examine? CRITICAL: each hire MUST receive a \
-   different data_filter so they examine different records. The filter \
-   controls what the data source API returns — different filter values \
-   produce different records. If you leave data_filter empty or give \
-   every hire the same filter, they will all see the same 100 records \
-   and produce convergent findings regardless of role differences.
+F. What data slice do they examine? Your PRIMARY JOB is to partition \
+   the corpus into non-overlapping slices that together cover every \
+   record exactly once. Each hire gets one slice.
 
-   Look at the DATA SOURCE FILTER SCHEMA above. Pick a filter \
-   parameter and assign different values to different hires. For \
-   example, if the schema has a "keyword" parameter, assign different \
-   keywords to different hires so each searches a different slice of \
-   the data. If it has a "packages" parameter, assign different \
-   package lists.
+   A PARTITION is a filter condition over record fields:
+   - "maintainer_count = 1" — selects a specific subset
+   - "monthly_downloads between 5000 and 100000" — selects a range
+   - "created before 2020-01-01" — selects by date
 
-   The partition emerges from your reasoning about the engagement. \
-   What dimensions of the data would reveal different kinds of \
-   findings? Assign each hire a dimension.
+   A LENS is an analytical question (NOT a partition):
+   - "coordination patterns" — not a field, can't be filtered
+   - "temporal anomalies" — analytical concept, not a data attribute
+   - "structural chokepoints" — investigative angle, not a record filter
+   - "supply chain risks" — what to look for, not which records
+
+   You MUST author partitions, not lenses. The system translates each \
+   partition to a SQL query. If it can't translate, the run halts.
+
+   Your partitions MUST tile the corpus:
+   - COMPLETE: every record in the corpus is in exactly one partition
+   - EXCLUSIVE: no record is in two partitions
+   - FILTERABLE: each partition uses field names and values from the \
+     corpus schema (see the Partitioning Guide in SKILL.md)
+
+   Use the field distributions from your workspace context to pick \
+   break points. Example: if maintainer_count has 78K records at 1, \
+   10K at 2-5, and 13K at 6+, partition on those breaks. Each worker \
+   gets a roughly balanced slice of the corpus.
+
+   The worker decides what to look for within their slice. You decide \
+   which slice each worker gets. The lens is the worker's tool. The \
+   partition is your deliverable.
 
 G. What scope description do they get? Describe what this hire \
    investigates in terms that ground to their data assignment. The \
@@ -1716,10 +1730,9 @@ Return JSON:
                 "heuristic": "posture for ambiguous moments"
             }},
             "justification": "what dimension of the work this hire covers and why it requires distinct cognition",
-            "data_assignment": "what subset of the data this hire examines and why — the reasoning behind the filter",
+            "partition": "filter condition over record fields that selects a non-overlapping slice of the corpus. Must use field names from the schema. Examples: 'maintainer_count = 1', 'monthly_downloads between 5000 and 100000', 'dependency_count > 10 AND maintainer_count <= 2'. NOT analytical lenses like 'coordination patterns' or 'temporal anomalies'.",
             "scope_description": "what this hire investigates — grounded to the data they will actually see",
             "purpose": "why this hire is needed and what you need from them",
-            "data_filter": {{"keyword": "a specific search term for this hire's slice of the data — MUST differ between hires"}},
             "parent_context": "the evidence or reasoning that motivated this hire",
             "budget": 0.00
         }}
@@ -1745,7 +1758,14 @@ Return JSON:
         "capability_gaps": ["what was needed but unavailable"],
         "adjacent_findings": ["observations outside assigned scope"]
     }},
-    "unresolved": ["things noticed but not investigated"]
+    "unresolved": ["things noticed but not investigated"],
+    "broadcasts": [
+        {{
+            "post_type": "OBSERVATION | HYPOTHESIS | DEAD_END",
+            "content": "what to share with other nodes working on this engagement",
+            "references": ["post_ids from the board that this builds on, if any"]
+        }}
+    ]
 }}
 
 RULES:
@@ -1755,6 +1775,12 @@ RULES:
 - Every hire must have a concrete bar, not a vague one.
 - Never create exactly one hire. Either investigate alone or hire 2+.
 - Each hire must receive at least ${leaf_viable_envelope:.2f}.
+- broadcasts: observations worth sharing with the engagement. Not everything \
+  — only what other nodes working on different slices would benefit from knowing. \
+  DEAD_END posts are valuable: they save others from repeating failed approaches.
+- If you hired: your partitions MUST tile the corpus. Every record in exactly \
+  one partition, no overlaps, no gaps. Use field names and values from the schema. \
+  The partition gate will HALT the run if this is violated.
 
 Respond ONLY with valid JSON, no other text.
 """
@@ -1788,6 +1814,8 @@ Allocated: ${budget_allocated:.2f}
 Spent so far: ${budget_spent:.3f}
 Remaining: ${budget_remaining:.3f}
 Minimum hire envelope: ${leaf_viable_envelope:.2f}
+
+{board_context}
 
 ---
 
@@ -2022,6 +2050,8 @@ YOUR ORIGINAL SCOPE:
 
 {workspace_context}
 
+{board_context}
+
 For each hire below, you will see:
 - The role definition YOU authored for them (name, bar, heuristic)
 - Their output (observations and self-evaluation)
@@ -2126,6 +2156,37 @@ Options:
   uncovered AND the revised role is meaningfully different from the original.
 - RESOLVE: Arithmetic shows continuation is not warranted.
 
+STEP 2.5 — CASCADE DETECTION
+
+Look across your hires' observations for overlapping findings. When two \
+or more hires report similar observations, check the timing and attribution:
+
+- Did the later observation cite or reference an earlier post from the \
+  bulletin board? If yes, the convergence may be echo — one hire's \
+  broadcast influenced another's reasoning. Classify as CASCADE (suspect).
+- Did the hires arrive at the same finding independently, from different \
+  data slices or different analytical angles? If yes, the convergence is \
+  independent confirmation. Classify as INDEPENDENT (strong signal).
+
+Document each overlap you find with its classification and reasoning. \
+Independent convergence from different data is one of the strongest \
+signals the engagement can produce. Cascade echo from the board is noise \
+that should be noted but not double-counted.
+
+STEP 2.75 — COVERAGE CHECK
+
+Look across your hires' partitions and the records they examined:
+
+1. Did the children's partitions together cover your scope? What \
+   segments of the corpus did they collectively reach?
+2. Are the partitions mutually exclusive (low overlap), or did \
+   multiple hires examine the same records?
+3. Are there meaningful gaps — segments of your scope no hire reached?
+
+If coverage is poor: either spawn additional hires to cover gaps \
+(if budget allows), or record the coverage gap explicitly in your \
+synthesis so the engagement-level report is honest about partial coverage.
+
 STEP 3 — SYNTHESIZE
 
 Combine your own observations (if any) with your hires' met-the-bar \
@@ -2176,12 +2237,26 @@ Return JSON:
                 }},
                 "scope_description": "what to investigate",
                 "purpose": "why this continuation",
-                "data_filter": {{}},
+                "partition": "natural-language description of the data slice for this continuation",
                 "parent_context": "evidence motivating this",
                 "budget": 0.00
             }}
         ]
     }},
+    "coverage_assessment": {{
+        "partitions_covered": ["list of partition descriptions from hires"],
+        "overlap_detected": "none | low | high",
+        "gaps": ["segments of scope no hire reached"],
+        "action": "coverage is sufficient | spawning additional hires | recording gap in synthesis"
+    }},
+    "cascade_analysis": [
+        {{
+            "overlap": "what observation appeared in multiple hires",
+            "hires_involved": ["hire role names"],
+            "classification": "CASCADE | INDEPENDENT",
+            "reasoning": "why — cite board references for cascade, cite different data/angles for independent"
+        }}
+    ],
     "synthesized_findings": [
         {{
             "type": "the kind of finding",

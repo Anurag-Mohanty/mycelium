@@ -16,8 +16,11 @@ python3 run.py --source npm --budget 10 --prompts v2 --visualize
 # Explore SEC filings
 python3 run.py --source sec --budget 5 --prompts v2 --visualize
 
-# Headless run
+# Headless run with MECE partition gate
 python3 run.py --source npm --budget 5 --prompts v2
+
+# Gate off (instrumentation only, run continues even if partitions overlap)
+python3 run.py --source npm --budget 5 --prompts v2 --partition-gate off
 
 # Replay a recorded run
 python3 run.py --playback output/{run_id}/events.jsonl --speed 10
@@ -32,13 +35,13 @@ CATALOG (free)      Statistical survey of all records. 10 analytical techniques.
 GENESIS ($0.15)     Organizational charter — mission, quality standards, stakes.
                     Reads survey results to ground the investigation.
      |
-WORKSPACE           Charter + rules written to filesystem. Every node reads
-                    from shared workspace — no paraphrase drift.
+EQUIP ($0.03)       Workspace prep: field distributions, partition guide, SKILL.md.
+                    Gives the engagement lead the corpus structure it needs to partition.
      |
-EXPLORE ($$$)       Engagement lead authors an organization:
-                    - Hires specialists with authored roles (name, mission, bar)
-                    - Partitions data across hires (different filters = different records)
-                    - Each hire investigates, reassesses, extends or hires deeper
+EXPLORE ($$$)       Engagement lead partitions the corpus into non-overlapping slices:
+                    - Each hire gets a data filter (e.g., "dependency_count = 0")
+                    - MECE gate verifies partitions tile the corpus before children run
+                    - Workers investigate their slice, sub-partition if needed
                     - Manager Turn 2 evaluates reasoning quality, spawns continuations
                     - Budget arithmetic gates every decision
      |
@@ -47,6 +50,7 @@ SYNTHESIZE          Cross-references findings across branches.
 DEEP-DIVE           Targeted follow-up on most interesting findings.
      |
 VALIDATE            Skeptical review — confirmed, weakened, or refuted.
+                    Charter-shape check catches findings matching excluded patterns.
      |
 SIGNIFICANCE        Headlines vs significant vs noted.
      |
@@ -77,7 +81,7 @@ Every node in the system is the same primitive. "Manager" and "worker" are descr
 - **Bar** — minimum acceptable output (the floor, below which is failure)
 - **Heuristic** — posture for ambiguous moments
 
-**Data partitioning:** The engagement lead reasons about what data each hire should examine and authors different `data_filter` values. Different filters produce different API queries returning different records. Workers see different data, produce divergent findings.
+**Data partitioning:** The engagement lead partitions the corpus into non-overlapping slices using record field filters (e.g., `dependency_count = 0`, `maintainer_count >= 2`). EQUIP provides field distributions so the engagement lead knows where natural break points are. The MECE partition gate verifies every partition set tiles its parent scope before children execute. Different slices produce divergent findings because workers examine genuinely different data.
 
 ## Budget System
 
@@ -134,18 +138,24 @@ mycelium/
   schemas.py           # RoleDefinition, Directive, BudgetPool, Observation
   prompts_v2.py        # All LLM prompts (single source of truth)
   genesis.py           # Charter generation
+  equip.py             # EQUIP workspace prep (field distributions, partition guide)
+  translator.py        # Natural-language partition → SQL translation
+  partition_gate.py    # MECE enforcement at every parent→child boundary
+  bulletin_board.py    # Lateral comms (post/pull between sibling nodes)
   workspace.py         # Filesystem workspace (charter.md, rules.md)
   survey.py            # AnalyticalSurvey (10 techniques)
   synthesizer.py       # Cross-reference sibling observations
-  validator.py         # Skeptical review (factual + interpretive)
+  validator.py         # Skeptical review (factual + interpretive + charter-shape)
   significance.py      # Novelty + actionability scoring
   impact.py            # Real-world impact assessment
   reporter.py          # Five-tier markdown report
   reader_test.py       # Per-finding quality gate
   events.py            # WebSocket + events.jsonl recording
   knowledge_graph.py   # SQLite-backed persistent graph
+  deliverable.py       # Deliverable DB with embeddings
+  obsidian_export.py   # Obsidian vault export
   data_sources/
-    base.py            # DataSource interface + filter_schema()
+    base.py            # DataSource interface + filter_schema() + query_catalog()
     npm_registry.py    # npm connector
     sec_edgar.py       # SEC EDGAR connector
     federal_register.py
@@ -153,6 +163,7 @@ run.py                 # CLI entry point
 visualizer.html        # D3.js real-time tree visualization
 docs/
   PRD.md               # Full product requirements document and operational manual
+  AGENTIC_LESSONS.md   # Failure modes discovered building autonomous systems
 ```
 
 ## Output
@@ -167,17 +178,22 @@ Each run produces `output/{run_id}/` containing:
 - `tree.json` — Full exploration tree
 - `events.jsonl` — Event stream for playback
 - `knowledge_graph.json` — Entity/relationship graph
-- `workspace/` — Charter and rules (shared context)
+- `workspace/` — Charter, rules, and SKILL.md (shared context)
 - `nodes/` — Per-node JSON with observations, thinking, Turn 2 results
 - `diagnostics/` — Per-node diagnostic logs
+- `diagnostics/partition_gate/` — MECE gate results per parent node
+- `translations/` — SQL translations of partition descriptions
 - `transcripts/` — Per-node markdown transcripts
+- `deliverable.db` — SQLite deliverable with embeddings
+- `obsidian_vault/` — Per-entity markdown files with wiki-links
 
 ## Cost
 
 - Model: Claude Sonnet ($3/M input, $15/M output)
 - Extended thinking: 8000 token budget per node
-- Typical $5 run: ~18-21 nodes, ~90-100 observations, depth 2-3, ~99% budget utilization
-- Typical $10 run: ~30-45 nodes, ~100-150 observations, depth 2-3
+- Typical $1 run: ~5 nodes, ~26 observations, depth 1 (partition gate validation)
+- Typical $5 run: ~20 nodes, ~100 observations, depth 2-3
+- Typical $10 run: ~45 nodes, ~180 observations, depth 3-4
 
 ## Core Principle
 

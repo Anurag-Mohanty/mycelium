@@ -94,6 +94,62 @@ async def validate_finding(finding_id: str, finding_type: str, finding: dict) ->
     )
 
 
+async def check_charter_shape(finding_claim: str, charter_exclusions: str) -> dict:
+    """Check whether a finding's claim matches an excluded shape from the charter.
+
+    Context-isolated: receives ONLY the claim and the exclusions.
+    No worker reasoning, no observations, no scope context.
+
+    Returns:
+        dict with verdict, matched_exclusion, reasoning, recommended_action
+    """
+    if not charter_exclusions or not finding_claim:
+        return {
+            "verdict": "no_check",
+            "matched_exclusion": None,
+            "reasoning": "No charter exclusions available for checking",
+            "recommended_action": "pass",
+            "cost": 0,
+        }
+
+    prompt = (
+        f"Does this finding's main claim match the shape of an excluded pattern?\n\n"
+        f"FINDING CLAIM:\n{finding_claim}\n\n"
+        f"EXCLUDED PATTERNS (from the engagement charter):\n{charter_exclusions}\n\n"
+        f"For each exclusion, the charter describes the SHAPE of reasoning that is excluded, "
+        f"regardless of surface vocabulary. A finding matches an exclusion if its underlying "
+        f"claim reduces to the excluded shape, even with different words.\n\n"
+        f"Return JSON:\n"
+        f'{{"verdict": "matches_exclusion | no_match | partial_match", '
+        f'"matched_exclusion": "name of the specific exclusion that matches, or null", '
+        f'"reasoning": "which exclusion matches and why the shape matches, or why no exclusion fits", '
+        f'"recommended_action": "reject | weaken | annotate | pass"}}'
+    )
+
+    client = anthropic.Anthropic()
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        cost = (response.usage.input_tokens * 3 / 1_000_000 +
+                response.usage.output_tokens * 15 / 1_000_000)
+        raw = response.content[0].text
+        result = _parse_json(raw)
+        result["cost"] = cost
+        result["raw_reasoning"] = raw
+        return result
+    except Exception as e:
+        return {
+            "verdict": "error",
+            "matched_exclusion": None,
+            "reasoning": f"Charter-shape check failed: {e}",
+            "recommended_action": "pass",
+            "cost": 0,
+        }
+
+
 def _parse_json(text: str) -> dict:
     try:
         return json.loads(text)

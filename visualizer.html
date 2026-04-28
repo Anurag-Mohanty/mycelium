@@ -34,22 +34,34 @@ body {
 .phase-step.active { background: #8b7ff8; color: #fff; }
 .phase-step.done { background: #1a2e1a; color: #5cb85c; }
 
-/* === MAIN LAYOUT: tree left, log right === */
+/* === MAIN LAYOUT: tree left, right panel === */
 .main { display: flex; flex: 1; overflow: hidden; }
 .tree-container { flex: 1; position: relative; }
 .tree-container svg { width: 100%; height: 100%; }
 
-/* Right panel — ALWAYS shows activity log */
+/* Right panel with tabs */
 .right-panel {
     width: 380px; border-left: 1px solid #1e1e30;
     display: flex; flex-direction: column;
     flex-shrink: 0; overflow: hidden;
 }
-.panel-label {
-    padding: 8px 16px; border-bottom: 1px solid #1e1e30;
-    font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6a6a80;
+.panel-tabs {
+    display: flex; border-bottom: 1px solid #1e1e30; flex-shrink: 0;
 }
-.log-body { flex: 1; overflow-y: auto; padding: 8px 16px; }
+.panel-tab {
+    flex: 1; padding: 8px 10px; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 1px; color: #6a6a80; text-align: center; cursor: pointer;
+    border-bottom: 2px solid transparent; transition: color 0.2s, border-color 0.2s;
+}
+.panel-tab:hover { color: #9898b0; }
+.panel-tab.active { color: #8b7ff8; border-bottom-color: #8b7ff8; }
+.panel-tab .tab-count { font-size: 9px; color: #4a4a60; margin-left: 3px; }
+.panel-tab.active .tab-count { color: #6a6ab0; }
+.panel-content { flex: 1; overflow-y: auto; display: none; }
+.panel-content.active { display: block; }
+.log-body { padding: 8px 16px; }
+.kg-body { padding: 16px; }
+.bb-body { padding: 16px; }
 
 /* Log entries */
 .log-entry { padding: 4px 0; font-size: 11px; line-height: 1.6; color: #9898b0; border-bottom: 1px solid #0e0e18; }
@@ -75,7 +87,7 @@ body {
 /* === NODE DETAIL OVERLAY === */
 .detail-overlay {
     position: fixed; top: 0; right: 0; bottom: 0;
-    width: 440px; background: #0e0e1a; border-left: 2px solid #8b7ff8;
+    width: 480px; background: #0e0e1a; border-left: 2px solid #8b7ff8;
     z-index: 40; transform: translateX(100%);
     transition: transform 0.25s ease;
     overflow-y: auto; padding: 20px 24px;
@@ -94,6 +106,8 @@ body {
 .detail-scope { color: #b0b0c4; font-size: 12px; margin: 6px 0 12px; line-height: 1.5; }
 .detail-meta { font-size: 11px; color: #8888a0; margin-bottom: 14px; }
 .detail-meta .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.detail-section { margin-top: 16px; }
+.detail-section-label { font-size: 9px; text-transform: uppercase; color: #6a6a80; letter-spacing: 1px; margin-bottom: 8px; }
 .reasoning-step { margin: 8px 0; padding: 8px 14px; border-left: 3px solid #333; font-size: 12px; line-height: 1.5; color: #c0c0d4; }
 .reasoning-step.survey { border-color: #4a7ab0; }
 .reasoning-step.orient { border-color: #3da06e; }
@@ -103,8 +117,70 @@ body {
 .detail-finding { margin-top: 14px; padding: 10px 12px; background: #14141e; border-radius: 4px; font-size: 11px; line-height: 1.5; color: #b0b0c4; }
 .detail-finding-label { font-size: 9px; color: #6a6a80; text-transform: uppercase; margin-bottom: 4px; }
 
+/* Detail panel badges */
+.detail-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 3px;
+    font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
+    margin-right: 6px;
+}
+.detail-badge.manager { background: #1a1a3e; color: #9b7fe0; border: 1px solid #3a3a5e; }
+.detail-badge.worker { background: #1a2e1a; color: #5cb85c; border: 1px solid #2a3e2a; }
+.detail-badge.reviewing { background: #2e2a1a; color: #d0a040; border: 1px solid #3e3a2a; }
+
+/* Observation list in detail panel */
+.obs-item {
+    margin: 6px 0; padding: 8px 12px; background: #12121e; border-radius: 4px;
+    font-size: 11px; line-height: 1.5; cursor: pointer;
+}
+.obs-item:hover { background: #16162a; }
+.obs-item-summary { color: #b0b0c4; }
+.obs-item-detail { display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e1e30; color: #8888a0; font-size: 10px; }
+.obs-item.expanded .obs-item-detail { display: block; }
+
+/* Turn 2 child classification badges */
+.child-review {
+    margin: 6px 0; padding: 8px 12px; background: #12121e; border-radius: 4px;
+    font-size: 11px; line-height: 1.5;
+}
+.classify-badge {
+    display: inline-block; padding: 1px 6px; border-radius: 2px;
+    font-size: 8px; letter-spacing: 0.5px; text-transform: uppercase;
+    font-weight: bold;
+}
+.classify-badge.met { background: #1a2e1a; color: #5cb85c; }
+.classify-badge.exhausted { background: #1a1a3e; color: #6a9ad0; }
+.classify-badge.poor { background: #2e1a1a; color: #ef6f6f; }
+
+/* Reassessment display */
+.reassessment-box {
+    margin: 8px 0; padding: 10px 14px; border-radius: 4px;
+    border-left: 3px solid #8b7ff8; background: #12121e;
+    font-size: 11px; line-height: 1.6;
+}
+.reassessment-decision {
+    font-size: 12px; font-weight: bold; letter-spacing: 1px;
+}
+.reassessment-decision.resolve { color: #5cb85c; }
+.reassessment-decision.investigate { color: #d0901d; }
+.reassessment-decision.hire { color: #9b7fe0; }
+
+/* Knowledge graph placeholder */
+.kg-placeholder {
+    text-align: center; padding: 40px 20px; color: #4a4a60;
+}
+.kg-placeholder .kg-icon { font-size: 32px; margin-bottom: 12px; color: #2a2a3e; }
+.kg-stat { display: inline-block; margin: 8px 12px; text-align: center; }
+.kg-stat .num { font-size: 20px; color: #6a6a80; font-weight: bold; }
+.kg-stat .lbl { font-size: 9px; color: #4a4a60; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+
+/* Bulletin board placeholder */
+.bb-placeholder {
+    text-align: center; padding: 40px 20px; color: #4a4a60;
+}
+
 /* === TREE NODES === */
-.link { fill: none; stroke: #1e1e30; stroke-width: 1.5px; }
+.link { fill: none; stroke: #1e1e30; stroke-width: 1.5px; pointer-events: stroke; }
+.link.followup { stroke: #8b7ff8; stroke-dasharray: 4,3; stroke-width: 1px; }
 .node { cursor: pointer; }
 .node circle { stroke-width: 2px; transition: fill 0.3s, r 0.3s; }
 .node.exploring circle { fill: #4a7ab0; stroke: #6a9ad0; animation: pulse 1.5s infinite; }
@@ -112,9 +188,19 @@ body {
 .node.synthesizing circle { fill: #7b5fc0; stroke: #9b7fe0; animation: pulse 1s infinite; }
 .node.decomposing circle { fill: #5a9a5a; stroke: #7aba7a; }
 .node.idle circle { fill: #2a2a3e; stroke: #3a3a4e; }
+.node.reviewing circle { fill: #d0901d; stroke: #e0a030; animation: pulse 1.2s infinite; }
+.node.delegating circle { fill: #5a9a5a; stroke: #7aba7a; }
+.node.waiting_for_children circle { fill: #5a9a5a; stroke: #7aba7a; animation: pulse 2s infinite; }
+.node.complete circle { fill: #3da06e; stroke: #5dc08e; }
 .node.selected circle { stroke: #fff !important; stroke-width: 3px; }
 .node .label { font-size: 8px; fill: #9898b0; pointer-events: none; text-anchor: middle; }
 .node .obs-badge { font-size: 7px; fill: #fff; pointer-events: none; text-anchor: middle; dominant-baseline: central; }
+
+/* Manager promotion badge on node */
+.node .promoted-badge { font-size: 7px; fill: #d0901d; pointer-events: none; text-anchor: middle; }
+
+/* Turn 2 classification ring */
+.node .classify-ring { fill: none; stroke-width: 2px; pointer-events: none; }
 
 /* Tooltip */
 .tooltip { position: fixed; z-index: 30; pointer-events: none; background: #1a1a2e; border: 1px solid #333; border-radius: 4px; padding: 8px 12px; font-size: 11px; max-width: 320px; display: none; line-height: 1.4; color: #c0c0d0; }
@@ -140,6 +226,129 @@ body {
 .playback-bar select { background: #1a1a2e; color: #b0b0c0; border: 1px solid #333; padding: 3px 8px; border-radius: 3px; font-family: inherit; }
 
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.5} }
+
+/* === GENESIS ROOT NODE === */
+.node.genesis-root circle { fill: #8b7ff8; stroke: #a99bff; }
+.node.genesis-root .label { fill: #8b7ff8; font-size: 9px; font-weight: bold; }
+.node.equip-placeholder circle { fill: #1a1a2e; stroke: #3a3a5e; stroke-dasharray: 3,2; }
+.node.equip-placeholder .label { fill: #4a4a60; font-size: 8px; font-style: italic; }
+.node.equip-preparing circle { fill: #1a3a3a; stroke: #30b0b0; animation: pulse 1.5s infinite; }
+.node.equip-preparing .label { fill: #30b0b0; font-size: 8px; font-weight: bold; }
+.node.equip-ready circle { fill: #1a3a2a; stroke: #3da06e; }
+.node.equip-ready .label { fill: #3da06e; font-size: 8px; font-weight: bold; }
+.node.equip-failed circle { fill: #3a1a1a; stroke: #ef6f6f; }
+.node.equip-failed .label { fill: #ef6f6f; font-size: 8px; font-weight: bold; }
+
+/* === BUDGET FLOW ANIMATION === */
+@keyframes budgetPulse {
+    0% { stroke-opacity: 0.3; stroke-width: 1.5px; }
+    50% { stroke-opacity: 1; stroke-width: 3px; }
+    100% { stroke-opacity: 0.3; stroke-width: 1.5px; }
+}
+.link.budget-flowing { animation: budgetPulse 0.8s ease-in-out; stroke: #8b7ff8; }
+.link-hover-label {
+    font-size: 8px; fill: #8888a0; pointer-events: none; opacity: 0;
+    transition: opacity 0.2s;
+}
+
+/* === DECOMPOSITION OVERLAY === */
+@keyframes managerGlow {
+    0% { filter: drop-shadow(0 0 2px #8b7ff8); }
+    50% { filter: drop-shadow(0 0 12px #8b7ff8); }
+    100% { filter: drop-shadow(0 0 2px #8b7ff8); }
+}
+.node.decomposing-glow circle { animation: managerGlow 1s ease-in-out; }
+.decomp-overlay {
+    position: absolute; pointer-events: none; z-index: 20;
+    background: rgba(14,14,26,0.92); border: 1px solid #333; border-radius: 6px;
+    padding: 10px 14px; max-width: 280px; font-size: 10px; line-height: 1.5;
+    color: #b0b0c4; opacity: 0; transition: opacity 0.3s;
+}
+.decomp-overlay.visible { opacity: 1; pointer-events: auto; }
+.decomp-overlay .decomp-title { color: #9b7fe0; font-weight: bold; font-size: 11px; margin-bottom: 6px; }
+.decomp-overlay .decomp-roles { margin-top: 6px; }
+.decomp-overlay .decomp-role { color: #5cb85c; font-size: 10px; padding: 1px 0; }
+
+/* === REASONING CHOICE MARKERS === */
+.node .decision-marker {
+    font-size: 7px; fill: #8888a0; pointer-events: none;
+    text-anchor: middle; dominant-baseline: central;
+}
+.node .decision-marker.hire { fill: #9b7fe0; }
+.node .decision-marker.resolve { fill: #5cb85c; }
+.node .decision-marker.investigate { fill: #d0901d; }
+
+/* === CASCADE DETECTION === */
+.cascade-badge {
+    font-size: 7px; text-anchor: middle; pointer-events: none;
+    dominant-baseline: central;
+}
+.cascade-badge.cascade { fill: #d0901d; }
+.cascade-badge.independent { fill: #5cb85c; }
+.cascade-line { stroke-dasharray: 4,3; stroke-width: 1px; fill: none; opacity: 0.6; }
+.cascade-line.cascade { stroke: #d0901d; }
+.cascade-line.independent { stroke: #5cb85c; }
+
+/* === LATERAL EDGES (bulletin board influence) === */
+.lateral-edge { fill: none; stroke: #8b7ff8; stroke-width: 1px; stroke-dasharray: 6,4; opacity: 0.5; }
+
+/* === BULLETIN BOARD PANEL === */
+.bb-post-card {
+    margin: 6px 0; padding: 8px 12px; background: #12121e; border-radius: 4px;
+    font-size: 11px; line-height: 1.5; cursor: pointer; border-left: 3px solid #333;
+}
+.bb-post-card:hover { background: #16162a; }
+.bb-post-card.type-OBSERVATION { border-left-color: #4a7ab0; }
+.bb-post-card.type-HYPOTHESIS { border-left-color: #9b7fe0; }
+.bb-post-card.type-DEAD_END { border-left-color: #6a6a80; }
+.bb-post-type {
+    display: inline-block; font-size: 8px; letter-spacing: 0.5px;
+    text-transform: uppercase; padding: 1px 5px; border-radius: 2px;
+    font-weight: bold;
+}
+.bb-post-type.OBSERVATION { background: #1a2a3e; color: #4a7ab0; }
+.bb-post-type.HYPOTHESIS { background: #1a1a3e; color: #9b7fe0; }
+.bb-post-type.DEAD_END { background: #1a1a1a; color: #6a6a80; }
+.bb-post-type.EQUIP_BRIEFING { background: #0e2a2a; color: #30b0b0; }
+.bb-post-card.type-EQUIP_BRIEFING { border-left-color: #30b0b0; background: #0e1a1a; }
+.bb-post-card.type-EQUIP_BRIEFING .bb-post-detail { white-space: pre-wrap; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; font-size: 10px; }
+.bb-post-author { font-size: 9px; color: #6a6a80; margin-left: 6px; }
+.bb-post-content { margin-top: 4px; color: #b0b0c4; }
+.bb-post-detail { display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid #1e1e30; font-size: 10px; color: #8888a0; }
+.bb-post-card.expanded .bb-post-detail { display: block; }
+.bb-pull-marker {
+    display: inline-block; font-size: 8px; color: #4a4a60; margin-top: 4px;
+    padding: 1px 4px; background: #0e0e18; border-radius: 2px;
+}
+.bb-pull-marker.influenced { color: #d0901d; background: #1e1a14; }
+
+/* === KNOWLEDGE GRAPH PANEL === */
+.kg-graph-svg { width: 100%; height: 340px; }
+.kg-node-circle { cursor: pointer; }
+.kg-node-label { font-size: 7px; fill: #9898b0; pointer-events: none; text-anchor: middle; }
+.kg-edge-line { stroke: #2a2a3e; stroke-width: 1px; }
+.kg-edge-label { font-size: 6px; fill: #4a4a60; text-anchor: middle; }
+.kg-provenance-popup {
+    position: absolute; z-index: 25; background: #14141e; border: 1px solid #333;
+    border-radius: 4px; padding: 10px 14px; font-size: 10px; line-height: 1.5;
+    color: #b0b0c4; max-width: 260px; display: none;
+}
+.kg-provenance-popup.visible { display: block; }
+
+/* === PHASE STAGING HEADER STRIP === */
+.phase-stage-strip {
+    padding: 4px 24px; font-size: 10px; letter-spacing: 1px;
+    text-transform: uppercase; display: none; transition: all 0.3s;
+}
+.phase-stage-strip.active { display: block; }
+.phase-stage-strip.catalog { background: #14141e; color: #6a9ad0; border-bottom: 1px solid #1a2a3e; }
+.phase-stage-strip.genesis { background: #14141e; color: #b0a0e0; border-bottom: 1px solid #2a1a3e; }
+.phase-stage-strip.exploration { background: #0e1a14; color: #5cb85c; border-bottom: 1px solid #1a2e1a; }
+.phase-stage-strip.deep_dive { background: #1a1414; color: #d0901d; border-bottom: 1px solid #2e1a1a; }
+.phase-stage-strip.validation { background: #1a1a14; color: #d0a040; border-bottom: 1px solid #2e2a1a; }
+.phase-stage-strip.significance { background: #1a1a14; color: #e0b840; border-bottom: 1px solid #2e2a1a; }
+.phase-stage-strip.equip { background: #0e1a1a; color: #30b0b0; border-bottom: 1px solid #1a3a3a; }
+.phase-stage-strip.impact { background: #1a1410; color: #ff8844; border-bottom: 1px solid #2e1a10; }
 </style>
 </head>
 <body>
@@ -163,6 +372,7 @@ body {
     <div class="phase-bar" id="phase-bar">
         <div class="phase-step" data-phase="catalog">Catalog</div>
         <div class="phase-step" data-phase="genesis">Genesis</div>
+        <div class="phase-step" data-phase="equip">Equip</div>
         <div class="phase-step" data-phase="exploration">Explore</div>
         <div class="phase-step" data-phase="deep_dive">Deep-dive</div>
         <div class="phase-step" data-phase="validation">Validate</div>
@@ -171,11 +381,40 @@ body {
     </div>
 </div>
 
+<div class="phase-stage-strip" id="phase-stage-strip"></div>
+
 <div class="main">
-    <div class="tree-container" id="tree-container"><svg id="tree-svg"></svg></div>
+    <div class="tree-container" id="tree-container">
+        <svg id="tree-svg"></svg>
+        <div class="decomp-overlay" id="decomp-overlay"></div>
+        <div class="kg-provenance-popup" id="kg-provenance-popup"></div>
+    </div>
     <div class="right-panel">
-        <div class="panel-label">Activity</div>
-        <div class="log-body" id="log-body"></div>
+        <div class="panel-tabs">
+            <div class="panel-tab active" data-tab="activity" onclick="switchTab('activity')">Activity</div>
+            <div class="panel-tab" data-tab="kg" onclick="switchTab('kg')">Graph <span class="tab-count" id="kg-count">0</span></div>
+            <div class="panel-tab" data-tab="bb" onclick="switchTab('bb')">Bulletin <span class="tab-count" id="bb-count">0</span></div>
+        </div>
+        <div class="panel-content active" data-tab="activity">
+            <div class="log-body" id="log-body"></div>
+        </div>
+        <div class="panel-content" data-tab="kg">
+            <div class="kg-body" id="kg-body">
+                <div style="display:flex;justify-content:center;gap:24px;padding:8px 0 4px">
+                    <div class="kg-stat"><div class="num" id="kg-entities">0</div><div class="lbl">entities</div></div>
+                    <div class="kg-stat"><div class="num" id="kg-relations">0</div><div class="lbl">relationships</div></div>
+                </div>
+                <svg class="kg-graph-svg" id="kg-graph-svg"></svg>
+            </div>
+        </div>
+        <div class="panel-content" data-tab="bb">
+            <div class="bb-body" id="bb-body">
+                <div style="font-size:10px;color:#6a6a80;margin-bottom:8px;letter-spacing:1px;text-transform:uppercase">
+                    Bulletin Board <span style="color:#4a4a60" id="bb-posts-label">0 posts</span>
+                </div>
+                <div id="bb-posts-container"></div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -187,7 +426,7 @@ body {
 <div class="playback-bar" id="playback-bar">
     <button id="play-btn" onclick="togglePause()">Pause</button>
     <input type="range" id="scrub" min="0" max="100" value="0" oninput="scrubTo(this.value)">
-    <select onchange="setSpeed(this.value)"><option value="1">1x</option><option value="5">5x</option><option value="10" selected>10x</option><option value="20">20x</option></select>
+    <select onchange="setSpeed(this.value)"><option value="0.5">0.5x</option><option value="1">1x</option><option value="2">2x</option><option value="5">5x</option><option value="10" selected>10x</option><option value="20">20x</option></select>
     <span id="playback-time">0:00 / 0:00</span>
 </div>
 
@@ -197,6 +436,41 @@ const nodes = new Map();
 let totalNodes=0, totalObs=0, maxDepth=0, totalFindings=0;
 let selectedNodeId = null;
 let headlineFindings=[], significantFindings=[];
+let followupLinks = []; // parent_node -> child_node for continuation lineage
+let kgEntities=0, kgRelations=0, bbPosts=0;
+let currentPhase = '';
+
+// Bulletin board state
+const bbPostsList = []; // full post objects
+const bbPullsList = []; // full pull objects
+
+// Knowledge graph visualization state
+const kgNodes = []; // {id, name, type, observation_count}
+const kgEdges = []; // {source, target, relationship_type}
+let kgSimulation = null;
+
+// Lateral edges (bulletin board influence lines in tree)
+const lateralEdges = []; // {source_node_id, target_node_id}
+
+// Budget flow tracking
+const budgetAllocations = new Map(); // parent_id -> [{child_id, amount}]
+
+// Cascade analysis results
+const cascadeResults = new Map(); // node_id -> cascade_analysis array
+
+// Decomposition overlay timer
+let decompOverlayTimer = null;
+
+// EQUIP node tracking
+let equipNodeId = null; // populated when EQUIP node_spawned arrives
+let equipStatus = 'placeholder'; // placeholder | preparing | ready | failed
+let equipBriefingContent = ''; // SKILL.md content from EQUIP_BRIEFING post
+
+// === TAB SWITCHING ===
+function switchTab(tab) {
+    document.querySelectorAll('.panel-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.querySelectorAll('.panel-content').forEach(c => c.classList.toggle('active', c.dataset.tab === tab));
+}
 
 // === D3 ===
 const svg = d3.select('#tree-svg');
@@ -232,8 +506,10 @@ function handleEvent(evt) {
     switch(evt.type) {
         case 'phase_change': {
             const phase = evt.phase || evt.to_phase || '';
+            currentPhase = phase;
             document.getElementById('source-info').textContent = `Phase: ${phase.replace(/_/g,' ').toUpperCase()}`;
             updatePhaseBar(phase);
+            updatePhaseStageStrip(phase);
             addLog('phase', `--- ${phase.replace(/_/g,' ').toUpperCase()} ---`);
             break;
         }
@@ -310,14 +586,58 @@ function handleEvent(evt) {
         }
 
         case 'node_spawned': {
+            // Detect EQUIP node — populate the placeholder instead of creating a new tree node
+            if (evt.tree_position === 'EQUIP') {
+                equipNodeId = evt.node_id;
+                equipStatus = 'preparing';
+                // Store EQUIP data in nodes map for detail overlay
+                nodes.set(evt.node_id, {
+                    id:evt.node_id, parent_id:evt.parent_id, position:'EQUIP',
+                    status:'equip-preparing', obs_count:0, scope:'Workspace Prep',
+                    segment:'', reasoning:{}, cost:0, top_observation:'',
+                    children_scopes:[], budget_allocated:evt.budget||0, budget_spent:0,
+                    role_name:evt.role_name||'workspace_prep', mission:evt.mission||'', bar:evt.bar||'',
+                    scope_level:'', was_promoted:false, reassessment:null,
+                    turn2:null, turn2_decision:'', child_classifications:{},
+                    observations:[], self_evaluation:null,
+                    is_followup:false, followup_reason:'', formation_decision:'',
+                    is_equip: true,
+                });
+                totalNodes++;
+                document.getElementById('stat-nodes').textContent = totalNodes;
+                updateTree();
+                break;
+            }
             nodes.set(evt.node_id, {
                 id:evt.node_id, parent_id:evt.parent_id, position:evt.tree_position,
                 status:'exploring', obs_count:0, scope:evt.scope_summary||'',
                 segment:evt.segment_id||'', reasoning:{}, cost:0, top_observation:'',
-                children_scopes:[],
+                children_scopes:[], budget_allocated:evt.budget||0, budget_spent:0,
+                // Role fields (populated if emitted)
+                role_name:evt.role_name||'', mission:evt.mission||'', bar:evt.bar||'',
+                scope_level:evt.scope_level||'',
+                // State tracking
+                was_promoted: false, // worker -> manager mid-investigation
+                reassessment: null, // RESOLVE / INVESTIGATE_FURTHER / HIRE
+                turn2: null, // Turn 2 review output
+                turn2_decision: '', // continue / resolve
+                child_classifications: {}, // child_id -> classification
+                observations: [], // observation list
+                self_evaluation: null,
+                is_followup: false, // continuation from Turn 2
+                followup_reason: '',
+                // Reasoning markers
+                formation_decision: '', // investigate or hire
             });
             totalNodes++;
             document.getElementById('stat-nodes').textContent = totalNodes;
+            // Track budget allocation from parent
+            if (evt.parent_id && evt.budget) {
+                if (!budgetAllocations.has(evt.parent_id)) budgetAllocations.set(evt.parent_id, []);
+                budgetAllocations.get(evt.parent_id).push({ child_id: evt.node_id, amount: evt.budget });
+                // Trigger budget flow animation on the edge
+                triggerBudgetFlowAnimation(evt.parent_id, evt.node_id);
+            }
             // Don't log spawns — they're noise. The reasoning events tell the story.
             updateTree();
             break;
@@ -338,7 +658,7 @@ function handleEvent(evt) {
                 const n = nodes.get(evt.node_id);
                 // Append thinking chunks to a thinking array
                 if (!n.thinking_chunks) n.thinking_chunks = [];
-                n.thinking_chunks.push(evt.text);
+                n.thinking_chunks.push({ text: evt.text, turn: evt.turn || '' });
                 // Show in activity log
                 if (evt.chunk_index === 0) {
                     // First chunk — show with node position
@@ -353,11 +673,29 @@ function handleEvent(evt) {
         case 'node_resolved': {
             if (nodes.has(evt.node_id)) {
                 const n = nodes.get(evt.node_id);
-                n.status='resolved'; n.obs_count=evt.observations_count||0;
-                n.cost=evt.cost||0; n.top_observation=evt.top_observation||'';
+                n.obs_count=evt.observations_count||0;
+                n.cost=evt.cost||evt.cost_spent||0; n.top_observation=evt.top_observation||'';
+                n.budget_spent=n.cost;
+                if (evt.observations) n.observations = evt.observations;
+                if (evt.self_evaluation) n.self_evaluation = evt.self_evaluation;
+                // EQUIP resolution: check for READY vs CANNOT_PREP
+                if (n.is_equip || (evt.tree_position === 'EQUIP') || (equipNodeId && evt.node_id === equipNodeId)) {
+                    const topObs = (n.top_observation || '').toUpperCase();
+                    if (topObs.includes('CANNOT_PREP')) {
+                        equipStatus = 'failed';
+                        n.status = 'equip-failed';
+                        addLog('resolved', `[EQUIP] CANNOT_PREP — workspace preparation failed`);
+                    } else {
+                        equipStatus = 'ready';
+                        n.status = 'equip-ready';
+                        addLog('resolved', `[EQUIP] READY — workspace prepared. ${(n.top_observation||'').slice(0,80)}`);
+                    }
+                } else {
+                    n.status='resolved';
+                }
                 totalObs += n.obs_count;
                 document.getElementById('stat-obs').textContent = totalObs;
-                if (n.obs_count > 0) {
+                if (!n.is_equip && n.obs_count > 0) {
                     addLog('resolved', `[${n.position}] Resolved: ${n.obs_count} observations. ${(n.top_observation||'').slice(0,80)}`);
                 }
             }
@@ -369,16 +707,89 @@ function handleEvent(evt) {
                 const n = nodes.get(evt.node_id);
                 n.status='decomposing'; n.obs_count=evt.observations_count||0;
                 n.children_scopes=evt.children_scopes||[];
+                // Worker becoming a manager mid-investigation
+                n.was_promoted = true;
                 totalObs += n.obs_count;
                 document.getElementById('stat-obs').textContent = totalObs;
                 addLog('decomposing', `[${n.position}] ${n.obs_count} obs. Delegating to ${evt.children_count} sub-investigations.`);
+                // Show decomposition overlay near the node
+                showDecompOverlay(evt.node_id, evt.children_scopes || [], evt.reasoning_summary || '');
             }
             updateTree(); break;
         }
 
         case 'node_status':
-            if (nodes.has(evt.node_id)) { nodes.get(evt.node_id).status = evt.status; updateTree(); }
+            if (nodes.has(evt.node_id)) {
+                const n = nodes.get(evt.node_id);
+                n.status = evt.status;
+                updateTree();
+            }
             break;
+
+        // Reassessment event — worker deciding RESOLVE / INVESTIGATE_FURTHER / HIRE
+        case 'reassessment': {
+            if (nodes.has(evt.node_id)) {
+                const n = nodes.get(evt.node_id);
+                n.reassessment = {
+                    decision: evt.decision || '',
+                    reasoning: evt.reasoning || '',
+                    mission_met: evt.mission_met || '',
+                    what_changed: evt.what_changed || '',
+                };
+                n.formation_decision = evt.decision || '';
+                if (evt.decision === 'HIRE' || evt.decision === 'INVESTIGATE_FURTHER') {
+                    n.was_promoted = true;
+                }
+                if (selectedNodeId === evt.node_id) showDetailOverlay(evt.node_id);
+                updateTree();
+            }
+            break;
+        }
+
+        // Turn 2 result — manager reviewing children
+        case 'turn2_result': {
+            if (nodes.has(evt.node_id)) {
+                const n = nodes.get(evt.node_id);
+                n.turn2 = evt;
+                n.turn2_decision = evt.decision || evt.option_chosen || '';
+                // Child classifications
+                const reviews = evt.worker_reviews || evt.children_summary || [];
+                for (const r of reviews) {
+                    const childId = r.child_id || r.node_id || '';
+                    const classification = r.classification || r.hire_class || '';
+                    if (childId && classification) {
+                        n.child_classifications[childId] = classification;
+                        // Also store on child node
+                        if (nodes.has(childId)) {
+                            nodes.get(childId).turn2_classification = classification;
+                        }
+                    }
+                }
+                // Cascade analysis
+                if (evt.cascade_analysis && evt.cascade_analysis.length) {
+                    cascadeResults.set(evt.node_id, evt.cascade_analysis);
+                }
+                if (selectedNodeId === evt.node_id) showDetailOverlay(evt.node_id);
+                updateTree();
+            }
+            break;
+        }
+
+        // Followup spawned — continuation from Turn 2
+        case 'followup_spawned': {
+            followupLinks.push({
+                parent: evt.parent_node,
+                child: evt.child_node,
+                reason: evt.reason || '',
+            });
+            if (nodes.has(evt.child_node)) {
+                const child = nodes.get(evt.child_node);
+                child.is_followup = true;
+                child.followup_reason = evt.reason || '';
+            }
+            updateTree();
+            break;
+        }
 
         case 'budget_update': {
             const pct = evt.percent_used||0;
@@ -414,6 +825,86 @@ function handleEvent(evt) {
         case 'impact_result':
             addLog('impact', `[IMPACT: ${evt.urgency}] ${(evt.finding_summary||'').slice(0,80)}`);
             break;
+
+        // Knowledge graph updates
+        case 'kg_update': {
+            kgEntities = evt.entities || kgEntities;
+            kgRelations = evt.relations || kgRelations;
+            document.getElementById('kg-entities').textContent = kgEntities;
+            document.getElementById('kg-relations').textContent = kgRelations;
+            document.getElementById('kg-count').textContent = kgEntities;
+            // Update graph data if entity/relationship details provided
+            if (evt.entity_data) {
+                for (const e of evt.entity_data) {
+                    if (!kgNodes.find(n => n.id === e.name)) {
+                        kgNodes.push({ id: e.name, name: e.name, type: e.entity_type || 'unknown', observation_count: e.observation_count || 1 });
+                    } else {
+                        const existing = kgNodes.find(n => n.id === e.name);
+                        existing.observation_count = e.observation_count || existing.observation_count;
+                    }
+                }
+            }
+            if (evt.relationship_data) {
+                for (const r of evt.relationship_data) {
+                    if (!kgEdges.find(e => e.source === r.from_name && e.target === r.to_name && e.relationship_type === r.relationship_type)) {
+                        kgEdges.push({ source: r.from_name, target: r.to_name, relationship_type: r.relationship_type || '' });
+                    }
+                }
+            }
+            updateKgGraph();
+            break;
+        }
+
+        // Bulletin board updates
+        case 'bb_post': {
+            bbPosts += evt.post_count || 1;
+            document.getElementById('bb-posts-label').textContent = `${bbPosts} posts`;
+            document.getElementById('bb-count').textContent = bbPosts;
+            // Store post details if available
+            if (evt.posts) {
+                for (const p of evt.posts) {
+                    if (p.post_type === 'EQUIP_BRIEFING') equipBriefingContent = p.content || '';
+                    bbPostsList.push(p);
+                    renderBbPost(p);
+                }
+            } else {
+                // Minimal event — create a placeholder card
+                const placeholder = {
+                    post_id: evt.post_id || `p-${bbPosts}`,
+                    author_node_id: evt.node_id || '',
+                    author_role_name: evt.role_name || '',
+                    post_type: evt.post_type || 'OBSERVATION',
+                    content: evt.content || `Post from ${evt.node_id || 'unknown'}`,
+                    timestamp: evt.timestamp || Date.now()/1000,
+                    references: evt.references || [],
+                };
+                if (placeholder.post_type === 'EQUIP_BRIEFING') equipBriefingContent = placeholder.content || '';
+                bbPostsList.push(placeholder);
+                renderBbPost(placeholder);
+            }
+            break;
+        }
+
+        // Bulletin board pull event
+        case 'bb_pull': {
+            const pull = {
+                pull_id: evt.pull_id || '',
+                pulling_node_id: evt.pulling_node_id || evt.node_id || '',
+                post_id: evt.post_id || '',
+                influence: evt.influence || false,
+            };
+            bbPullsList.push(pull);
+            renderBbPull(pull);
+            // If influence, draw lateral edge in tree
+            if (pull.influence) {
+                const post = bbPostsList.find(p => p.post_id === pull.post_id);
+                if (post && post.author_node_id && pull.pulling_node_id) {
+                    lateralEdges.push({ source_node_id: post.author_node_id, target_node_id: pull.pulling_node_id });
+                    updateTree();
+                }
+            }
+            break;
+        }
 
         case 'exploration_complete':
             document.getElementById('source-info').textContent = `Complete: ${evt.total_nodes} nodes, ${evt.total_observations} obs, $${(evt.total_cost||0).toFixed(2)}, ${formatTime((evt.elapsed_seconds||0)*1000)}`;
@@ -498,53 +989,263 @@ function shortLabel(scope, depth) {
     const label = meaningful.slice(0, 3).join(' ');
     return label.length > 18 ? label.slice(0, 16) + '..' : label;
 }
-function nodeRadius(d) { return d.id==='__root__'?3:5+Math.min(8,(d.obs_count||0)*0.7); }
+function nodeRadius(d) { return (d.id==='__genesis__')?4:(d.id==='__equip__')?4:(d.id==='__root__')?3:5+Math.min(8,(d.obs_count||0)*0.7); }
 function countLeaves(n) { return (!n.children||!n.children.length)?1:n.children.reduce((s,c)=>s+countLeaves(c),0); }
+
+// Classification color for Turn 2 child rings
+function classifyColor(classification) {
+    if (!classification) return null;
+    const c = classification.toUpperCase();
+    if (c.includes('MET')) return '#5cb85c';
+    if (c.includes('EXHAUSTED')) return '#6a9ad0';
+    if (c.includes('POOR')) return '#ef6f6f';
+    return null;
+}
+
 function buildHierarchy(id) {
     const n=nodes.get(id); if(!n)return null;
     const ch=Array.from(nodes.values()).filter(c=>c.parent_id===id).map(c=>buildHierarchy(c.id)).filter(Boolean);
-    return {id:n.id,position:n.position,status:n.status,obs_count:n.obs_count,scope:n.scope,segment:n.segment,children:ch.length?ch:undefined};
+    return {
+        id:n.id, position:n.position, status:n.status, obs_count:n.obs_count,
+        scope:n.scope, segment:n.segment, was_promoted:n.was_promoted,
+        is_followup:n.is_followup, turn2_classification:n.turn2_classification,
+        formation_decision:n.formation_decision||'',
+        children:ch.length?ch:undefined,
+    };
 }
+
+// Wrap the real tree root under a synthetic genesis node with EQUIP node
+function wrapWithGenesis(realRoot) {
+    let equip;
+    if (equipNodeId && nodes.has(equipNodeId)) {
+        const en = nodes.get(equipNodeId);
+        equip = {
+            id:'__equip__', position:'EQUIP', status:en.status, obs_count:en.obs_count,
+            scope:'EQUIP', segment:'', was_promoted:false,
+            is_followup:false, turn2_classification:null, formation_decision:'',
+            is_equip:true, real_node_id:equipNodeId,
+        };
+    } else {
+        equip = {
+            id:'__equip__', position:'', status:'idle', obs_count:0,
+            scope:'EQUIP', segment:'', was_promoted:false,
+            is_followup:false, turn2_classification:null, formation_decision:'',
+        };
+    }
+    return {
+        id:'__genesis__', position:'', status:'genesis-root', obs_count:0,
+        scope:'Genesis', segment:'', was_promoted:false,
+        is_followup:false, turn2_classification:null, formation_decision:'',
+        children: [realRoot, equip],
+    };
+}
+
 function updateTree() {
     const arr=Array.from(nodes.values()); if(!arr.length)return;
     const roots=arr.filter(n=>!n.parent_id||!nodes.has(n.parent_id)); if(!roots.length)return;
-    let root=roots.length===1?buildHierarchy(roots[0].id):{id:'__root__',status:'idle',obs_count:0,scope:'Root',position:'',children:roots.map(r=>buildHierarchy(r.id))};
+    let realRoot=roots.length===1?buildHierarchy(roots[0].id):{id:'__root__',status:'idle',obs_count:0,scope:'Root',position:'',formation_decision:'',children:roots.map(r=>buildHierarchy(r.id))};
+    // Wrap under genesis
+    let root = wrapWithGenesis(realRoot);
     const leaves=countLeaves(root);
     const tl=d3.tree().nodeSize([Math.max(20,Math.min(42,380/Math.max(1,leaves))),85]);
     const hier=d3.hierarchy(root); tl(hier);
 
+    // --- Standard tree links ---
     const links=linkGroup.selectAll('.link').data(hier.links(),d=>`${d.source.data.id}-${d.target.data.id}`);
-    links.enter().append('path').attr('class','link').attr('opacity',0).merge(links).transition().duration(300).attr('opacity',1).attr('d',d3.linkVertical().x(d=>d.x).y(d=>d.y));
+    const linksEnter = links.enter().append('path').attr('class','link').attr('opacity',0)
+        .on('mouseover', function(e, d) {
+            const parentId = d.source.data.id;
+            const childId = d.target.data.id;
+            const allocs = budgetAllocations.get(parentId);
+            if (allocs) {
+                const alloc = allocs.find(a => a.child_id === childId);
+                if (alloc) {
+                    const t = document.getElementById('tooltip');
+                    t.style.display = 'block';
+                    t.innerHTML = `<div style="color:#8b7ff8">Budget allocation</div><div style="margin-top:4px">$${alloc.amount.toFixed(3)}</div>`;
+                    moveTooltip(e);
+                }
+            }
+        })
+        .on('mousemove', moveTooltip)
+        .on('mouseout', hideTooltip);
+    linksEnter.merge(links).transition().duration(300).attr('opacity',1).attr('d',d3.linkVertical().x(d=>d.x).y(d=>d.y));
     links.exit().transition().duration(200).attr('opacity',0).remove();
 
+    // --- Edge thickness for budget allocations ---
+    linkGroup.selectAll('.link').each(function(d) {
+        const parentId = d.source.data.id;
+        const childId = d.target.data.id;
+        const allocs = budgetAllocations.get(parentId);
+        if (allocs) {
+            const alloc = allocs.find(a => a.child_id === childId);
+            if (alloc) {
+                const thickness = Math.max(1.5, Math.min(5, alloc.amount * 4));
+                d3.select(this).style('stroke-width', thickness + 'px');
+            }
+        }
+    });
+
+    // --- Lateral edges (bulletin board influence) ---
+    const lateralData = lateralEdges.map(le => {
+        const sourceD = hier.descendants().find(d => d.data.id === le.source_node_id);
+        const targetD = hier.descendants().find(d => d.data.id === le.target_node_id);
+        return sourceD && targetD ? { source: sourceD, target: targetD, key: `lat-${le.source_node_id}-${le.target_node_id}` } : null;
+    }).filter(Boolean);
+    const lats = linkGroup.selectAll('.lateral-edge').data(lateralData, d => d.key);
+    lats.enter().append('path').attr('class','lateral-edge').merge(lats)
+        .attr('d', d => {
+            const sx=d.source.x, sy=d.source.y, tx=d.target.x, ty=d.target.y;
+            const midY = Math.min(sy, ty) - 20;
+            return `M${sx},${sy} C${sx},${midY} ${tx},${midY} ${tx},${ty}`;
+        });
+    lats.exit().remove();
+
+    // --- Cascade reference lines ---
+    const cascadeLineData = [];
+    cascadeResults.forEach((analyses, parentId) => {
+        for (const ca of analyses) {
+            if (ca.classification && ca.hires_involved && ca.hires_involved.length >= 2) {
+                // Find child nodes by role name match
+                const childNodes = hier.descendants().filter(d => {
+                    const n = nodes.get(d.data.id);
+                    return n && ca.hires_involved.some(h => n.role_name && n.role_name.includes(h));
+                });
+                for (let i = 0; i < childNodes.length - 1; i++) {
+                    cascadeLineData.push({
+                        source: childNodes[i], target: childNodes[i+1],
+                        classification: ca.classification,
+                        key: `cascade-${childNodes[i].data.id}-${childNodes[i+1].data.id}`,
+                    });
+                }
+            }
+        }
+    });
+    const cascLines = linkGroup.selectAll('.cascade-line').data(cascadeLineData, d => d.key);
+    cascLines.enter().append('path').attr('class', d => `cascade-line ${(d.classification||'').toLowerCase()}`)
+        .merge(cascLines)
+        .attr('d', d => {
+            const sx=d.source.x, sy=d.source.y, tx=d.target.x, ty=d.target.y;
+            const midY = Math.max(sy, ty) + 15;
+            return `M${sx},${sy} C${sx},${midY} ${tx},${midY} ${tx},${ty}`;
+        });
+    cascLines.exit().remove();
+
+    // --- Nodes ---
     const ns=nodeGroup.selectAll('.node').data(hier.descendants(),d=>d.data.id);
     const enter=ns.enter().append('g').attr('transform',d=>`translate(${d.x},${d.y})`).attr('opacity',0)
-        .on('click',(e,d)=>{e.stopPropagation();toggleDetail(d.data.id);})
-        .on('mouseover',(e,d)=>showTooltip(e,d.data)).on('mousemove',moveTooltip).on('mouseout',hideTooltip);
+        .on('click',(e,d)=>{
+            e.stopPropagation();
+            if(d.data.id==='__genesis__')return;
+            if(d.data.id==='__equip__') { if(equipNodeId) showEquipDetail(); return; }
+            toggleDetail(d.data.id);
+        })
+        .on('mouseover',(e,d)=>{if(d.data.id==='__genesis__')showTooltipSimple(e,'Genesis');else if(d.data.id==='__equip__')showEquipTooltip(e);else showTooltip(e,d.data);})
+        .on('mousemove',moveTooltip).on('mouseout',hideTooltip);
     enter.append('circle').attr('r',d=>nodeRadius(d.data));
+    // Outer ring for Turn 2 classification
+    enter.append('circle').attr('class','classify-ring').attr('r',d=>nodeRadius(d.data)+3);
+    // Promoted badge (M for manager)
+    enter.append('text').attr('class','promoted-badge').attr('dy',-nodeRadius(root)+1).attr('dx',nodeRadius(root)+2);
+    // Decision marker (formation choice)
+    enter.append('text').attr('class','decision-marker');
+    // Cascade badge
+    enter.append('text').attr('class','cascade-badge');
     enter.append('text').attr('class','label')
         .attr('dy', d => {
-            if (d.depth > 1) return nodeRadius(d.data) + 11;
-            // Stagger depth 0-1 labels: even nodes above, odd nodes below
+            if (d.data.id === '__genesis__') return nodeRadius(d.data) + 12;
+            if (d.data.id === '__equip__') return nodeRadius(d.data) + 12;
+            if (d.depth > 2) return nodeRadius(d.data) + 11;
+            // Stagger depth 1-2 labels (shifted by 1 due to genesis wrapper)
             const idx = d.parent ? d.parent.children.indexOf(d) : 0;
             return idx % 2 === 0 ? nodeRadius(d.data) + 13 : -(nodeRadius(d.data) + 5);
         })
-        .text(d => shortLabel(d.data.scope, d.depth));
+        .text(d => {
+            if (d.data.id === '__genesis__') return 'GENESIS';
+            if (d.data.id === '__equip__') return 'EQUIP';
+            // depth shifted +1 due to genesis wrapper
+            return shortLabel(d.data.scope, d.depth - 1);
+        });
     enter.append('text').attr('class','obs-badge').text(d=>d.data.obs_count>0?d.data.obs_count:'');
 
     const merged=ns.merge(enter);
     merged.transition().duration(300).attr('opacity',1).attr('transform',d=>`translate(${d.x},${d.y})`);
-    merged.attr('class',d=>`node ${d.data.status}${d.data.id===selectedNodeId?' selected':''}`);
-    merged.select('circle').transition().duration(250).attr('r',d=>nodeRadius(d.data));
-    merged.select('.label').text(d=>shortLabel(d.data.scope, d.depth));
+    merged.attr('class',d=>{
+        if(d.data.id==='__genesis__') return 'node genesis-root';
+        if(d.data.id==='__equip__') {
+            if (equipStatus === 'preparing') return 'node equip-preparing';
+            if (equipStatus === 'ready') return 'node equip-ready';
+            if (equipStatus === 'failed') return 'node equip-failed';
+            return 'node equip-placeholder';
+        }
+        return `node ${d.data.status}${d.data.id===selectedNodeId?' selected':''}`;
+    });
+    merged.select('circle:first-child').transition().duration(250).attr('r',d=>nodeRadius(d.data));
+    // Classification ring
+    merged.select('.classify-ring').attr('r',d=>nodeRadius(d.data)+3)
+        .attr('stroke',d=>classifyColor(d.data.turn2_classification)||'none')
+        .attr('stroke-width',d=>classifyColor(d.data.turn2_classification)?2:0);
+    // Promoted badge
+    merged.select('.promoted-badge')
+        .text(d=>d.data.was_promoted?'M':d.data.is_followup?'C':'')
+        .attr('dy',d=>-(nodeRadius(d.data)+2))
+        .attr('dx',d=>nodeRadius(d.data)+1);
+    // Decision marker (reassessment choice)
+    merged.select('.decision-marker')
+        .text(d => {
+            const dec = (d.data.formation_decision || '').toUpperCase();
+            if (dec === 'HIRE') return 'H';
+            if (dec === 'RESOLVE') return 'R';
+            if (dec === 'INVESTIGATE_FURTHER') return 'I';
+            return '';
+        })
+        .attr('class', d => {
+            const dec = (d.data.formation_decision || '').toUpperCase();
+            let cls = 'decision-marker';
+            if (dec === 'HIRE') cls += ' hire';
+            else if (dec === 'RESOLVE') cls += ' resolve';
+            else if (dec === 'INVESTIGATE_FURTHER') cls += ' investigate';
+            return cls;
+        })
+        .attr('dy', d => nodeRadius(d.data) + 2)
+        .attr('dx', d => -(nodeRadius(d.data) + 4));
+    // Cascade badge on parent nodes
+    merged.select('.cascade-badge')
+        .text(d => {
+            const cas = cascadeResults.get(d.data.id);
+            if (!cas || !cas.length) return '';
+            const hasCascade = cas.some(c => (c.classification||'').toUpperCase() === 'CASCADE');
+            return hasCascade ? 'C' : '';
+        })
+        .attr('class', d => {
+            const cas = cascadeResults.get(d.data.id);
+            if (!cas || !cas.length) return 'cascade-badge';
+            const hasCascade = cas.some(c => (c.classification||'').toUpperCase() === 'CASCADE');
+            return hasCascade ? 'cascade-badge cascade' : 'cascade-badge independent';
+        })
+        .attr('dy', d => -(nodeRadius(d.data) + 2))
+        .attr('dx', d => -(nodeRadius(d.data) + 4));
+    merged.select('.label').text(d => {
+        if (d.data.id === '__genesis__') return 'GENESIS';
+        if (d.data.id === '__equip__') return 'EQUIP';
+        return shortLabel(d.data.scope, d.depth - 1);
+    });
     merged.select('.obs-badge').text(d=>d.data.obs_count>0?d.data.obs_count:'');
     ns.exit().transition().duration(200).attr('opacity',0).remove();
+
+    // Store node positions for decomp overlay and budget animation
+    hier.descendants().forEach(d => {
+        if (nodes.has(d.data.id)) {
+            nodes.get(d.data.id)._treeX = d.x;
+            nodes.get(d.data.id)._treeY = d.y;
+        }
+    });
 }
 
 // Click empty space to close detail
 svg.on('click', () => closeDetailOverlay());
 
-// === DETAIL OVERLAY (separate from log) ===
+// === DETAIL OVERLAY (rich per-node panel) ===
 function toggleDetail(nodeId) {
     if (selectedNodeId === nodeId) { closeDetailOverlay(); return; }
     selectedNodeId = nodeId;
@@ -555,38 +1256,255 @@ function toggleDetail(nodeId) {
 function showDetailOverlay(nodeId) {
     const n = nodes.get(nodeId); if(!n) return;
     selectedNodeId = nodeId;
-    const colors={exploring:'#4a7ab0',resolved:'#3da06e',decomposing:'#5a9a5a',synthesizing:'#7b5fc0',idle:'#555'};
+    const colors={exploring:'#4a7ab0',resolved:'#3da06e',decomposing:'#5a9a5a',synthesizing:'#7b5fc0',idle:'#555',reviewing:'#d0901d',delegating:'#5a9a5a',waiting_for_children:'#5a9a5a',complete:'#3da06e'};
 
-    let html = `<button class="detail-close" onclick="closeDetailOverlay()">&times;</button>
-        <div class="detail-title">[${n.position||'ROOT'}]</div>
-        <div class="detail-scope">${n.scope||'Root'}</div>
-        <div class="detail-meta"><span class="dot" style="background:${colors[n.status]||'#555'}"></span>${n.status} | $${(n.cost||0).toFixed(3)} | ${n.obs_count} obs${n.segment?` | ${n.segment}`:''}</div>
-        <hr style="border-color:#1e1e30;margin:10px 0">`;
+    let html = `<button class="detail-close" onclick="closeDetailOverlay()">&times;</button>`;
 
-    // Show extended thinking (genuine chain-of-thought)
+    // Title: position + role name
+    html += `<div class="detail-title">[${n.position||'ROOT'}]${n.role_name?' '+n.role_name:''}</div>`;
+
+    // Scope description
+    html += `<div class="detail-scope">${n.scope||'Root'}</div>`;
+
+    // Badges row
+    html += `<div style="margin-bottom:10px">`;
+    if (n.was_promoted) html += `<span class="detail-badge manager">Manager</span>`;
+    else if (n.status === 'resolved' && !n.was_promoted) html += `<span class="detail-badge worker">Worker</span>`;
+    if (n.is_followup) html += `<span class="detail-badge reviewing">Continuation</span>`;
+    if (n.scope_level && n.scope_level !== 'ambiguous') html += `<span class="detail-badge" style="background:#14141e;color:#8888a0;border:1px solid #2a2a3e">${n.scope_level}</span>`;
+    html += `</div>`;
+
+    // Meta line: status, cost, obs count
+    html += `<div class="detail-meta">
+        <span class="dot" style="background:${colors[n.status]||'#555'}"></span>${n.status}
+        | $${(n.cost||0).toFixed(3)}
+        | ${n.obs_count} obs
+        ${n.segment?` | seg: ${n.segment}`:''}
+    </div>`;
+
+    // Mission and bar (if available)
+    if (n.mission) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Mission</div>
+            <div style="font-size:11px;color:#b0b0c4;line-height:1.5">${n.mission}</div>
+        </div>`;
+    }
+    if (n.bar) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Bar (minimum acceptable)</div>
+            <div style="font-size:11px;color:#a08080;line-height:1.5">${n.bar}</div>
+        </div>`;
+    }
+
+    // Budget
+    if (n.budget_allocated > 0) {
+        const pct = n.budget_allocated > 0 ? ((n.cost || 0) / n.budget_allocated * 100).toFixed(0) : 0;
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Budget</div>
+            <div style="font-size:11px;color:#b0b0c4">
+                $${(n.cost||0).toFixed(3)} / $${n.budget_allocated.toFixed(3)} (${pct}%)
+            </div>
+            <div style="height:4px;background:#1a1a2e;border-radius:2px;margin-top:4px;overflow:hidden">
+                <div style="height:100%;width:${Math.min(100,pct)}%;background:${pct>80?'#ef6f6f':'#8b7ff8'}"></div>
+            </div>
+        </div>`;
+    }
+
+    // Continuation link back to parent
+    if (n.is_followup && n.parent_id) {
+        const parent = nodes.get(n.parent_id);
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Continuation of</div>
+            <div style="font-size:11px;color:#9b7fe0;cursor:pointer;text-decoration:underline"
+                 onclick="toggleDetail('${n.parent_id}')">
+                [${parent?parent.position:'?'}] ${parent?parent.scope.slice(0,60):'parent node'}
+            </div>
+            ${n.followup_reason?`<div style="font-size:10px;color:#8888a0;margin-top:4px">${n.followup_reason}</div>`:''}
+        </div>`;
+    }
+
+    html += `<hr style="border-color:#1e1e30;margin:12px 0">`;
+
+    // Reassessment decision (worker mid-investigation)
+    if (n.reassessment) {
+        const dec = n.reassessment.decision || '';
+        const decClass = dec === 'RESOLVE' ? 'resolve' : dec === 'HIRE' ? 'hire' : 'investigate';
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Reassessment</div>
+            <div class="reassessment-box">
+                <div class="reassessment-decision ${decClass}">${dec}</div>
+                ${n.reassessment.reasoning?`<div style="margin-top:6px;color:#b0b0c4;font-size:11px">${n.reassessment.reasoning.slice(0,200)}</div>`:''}
+                ${n.reassessment.what_changed?`<div style="margin-top:4px;color:#8888a0;font-size:10px">Changed: ${n.reassessment.what_changed.slice(0,150)}</div>`:''}
+            </div>
+        </div>`;
+    }
+
+    // Thinking (genuine chain-of-thought)
     if (n.thinking_chunks && n.thinking_chunks.length) {
-        html += `<div style="font-size:9px;text-transform:uppercase;color:#8b7ff8;letter-spacing:1px;margin-bottom:8px">Thinking</div>`;
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Thinking</div>`;
+        // Group by turn if available
+        const byTurn = {};
         for (const chunk of n.thinking_chunks) {
-            html += `<div style="margin:6px 0;padding:8px 12px;border-left:2px solid #333;font-size:11px;line-height:1.5;color:#b0b0c4;font-style:italic">"${chunk}"</div>`;
+            const turn = chunk.turn || 'initial';
+            if (!byTurn[turn]) byTurn[turn] = [];
+            byTurn[turn].push(chunk.text);
         }
+        for (const [turn, texts] of Object.entries(byTurn)) {
+            if (Object.keys(byTurn).length > 1) {
+                html += `<div style="font-size:9px;color:#6a6a80;margin:6px 0 2px;text-transform:uppercase">${turn}</div>`;
+            }
+            for (const text of texts) {
+                html += `<div style="margin:4px 0;padding:8px 12px;border-left:2px solid #333;font-size:11px;line-height:1.5;color:#b0b0c4;font-style:italic">"${text}"</div>`;
+            }
+        }
+        html += `</div>`;
     }
     // Fallback: old reasoning steps format
     else if (Object.keys(n.reasoning).length) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Reasoning</div>`;
         for (const step of ['survey','orient','hypothesize','assess']) {
             if (n.reasoning[step]) {
                 html += `<div class="reasoning-step ${step}"><div class="step-label">${step}</div>"${n.reasoning[step]}"</div>`;
             }
         }
+        html += `</div>`;
     }
     else if (n.status==='exploring') {
         html += `<div style="color:#555;font-size:12px;margin:14px 0">Reasoning in progress...</div>`;
     }
-    if (n.top_observation) {
+
+    // Observations
+    if (n.obs_count > 0) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Observations (${n.obs_count})</div>`;
+        if (n.observations && n.observations.length) {
+            for (let i = 0; i < Math.min(n.observations.length, 10); i++) {
+                const obs = n.observations[i];
+                const summary = obs.raw_evidence || obs.local_hypothesis || 'Observation ' + (i+1);
+                html += `<div class="obs-item" onclick="this.classList.toggle('expanded')">
+                    <div class="obs-item-summary">${summary.slice(0,120)}</div>
+                    <div class="obs-item-detail">
+                        ${obs.local_hypothesis?`<div><b>Hypothesis:</b> ${obs.local_hypothesis.slice(0,200)}</div>`:''}
+                        ${obs.statistical_grounding?`<div><b>Grounding:</b> ${obs.statistical_grounding.slice(0,200)}</div>`:''}
+                        ${obs.confidence?`<div><b>Confidence:</b> ${obs.confidence}</div>`:''}
+                    </div>
+                </div>`;
+            }
+            if (n.observations.length > 10) {
+                html += `<div style="font-size:10px;color:#6a6a80;margin-top:6px">+ ${n.observations.length - 10} more</div>`;
+            }
+        } else if (n.top_observation) {
+            html += `<div class="detail-finding"><div class="detail-finding-label">Top Finding</div>${n.top_observation}</div>`;
+        }
+        html += `</div>`;
+    } else if (n.top_observation) {
         html += `<div class="detail-finding"><div class="detail-finding-label">Top Finding</div>${n.top_observation}</div>`;
     }
+
+    // Self-evaluation
+    if (n.self_evaluation) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Self-Evaluation</div>
+            <div style="font-size:11px;color:#b0b0c4;line-height:1.6;padding:8px 12px;background:#12121e;border-radius:4px">`;
+        if (typeof n.self_evaluation === 'object') {
+            for (const [k, v] of Object.entries(n.self_evaluation)) {
+                if (v && typeof v !== 'object') {
+                    html += `<div><span style="color:#8888a0">${k}:</span> ${String(v).slice(0,100)}</div>`;
+                }
+            }
+        } else {
+            html += String(n.self_evaluation).slice(0, 300);
+        }
+        html += `</div></div>`;
+    }
+
+    // Turn 2 review (for managers)
+    if (n.turn2) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Turn 2 Review</div>`;
+
+        // Decision
+        if (n.turn2_decision) {
+            const dec = n.turn2_decision.toUpperCase();
+            const decColor = dec.includes('E') || dec === 'RESOLVE' ? '#5cb85c' : '#d0901d';
+            html += `<div style="font-size:12px;font-weight:bold;color:${decColor};margin-bottom:8px">
+                Decision: ${dec}${n.turn2.option_reasoning?` — ${n.turn2.option_reasoning.slice(0,80)}`:''}
+            </div>`;
+        }
+
+        // Child classifications
+        const reviews = n.turn2.worker_reviews || n.turn2.children_summary || [];
+        if (reviews.length) {
+            html += `<div style="margin-top:8px">`;
+            for (const r of reviews) {
+                const cls = (r.classification || r.hire_class || '').toUpperCase();
+                let badgeClass = 'met';
+                if (cls.includes('EXHAUSTED')) badgeClass = 'exhausted';
+                else if (cls.includes('POOR')) badgeClass = 'poor';
+                html += `<div class="child-review">
+                    <span class="classify-badge ${badgeClass}">${cls || 'unclassified'}</span>
+                    <span style="color:#b0b0c4;margin-left:6px">${(r.worker_scope || r.scope || '').slice(0,60)}</span>
+                    ${r.assessment?`<div style="font-size:10px;color:#8888a0;margin-top:3px">${r.assessment.slice(0,100)}</div>`:''}
+                </div>`;
+            }
+            html += `</div>`;
+        }
+
+        // Synthesis findings
+        if (n.turn2.synthesis) {
+            const syn = n.turn2.synthesis;
+            if (syn.patterns && syn.patterns.length) {
+                html += `<div style="margin-top:8px"><div style="font-size:9px;color:#6a6a80;text-transform:uppercase;margin-bottom:4px">Cross-cutting patterns</div>`;
+                for (const p of syn.patterns.slice(0,3)) {
+                    html += `<div style="font-size:10px;color:#b0b0c4;padding:2px 0">- ${p.slice(0,100)}</div>`;
+                }
+                html += `</div>`;
+            }
+        }
+        html += `</div>`;
+    }
+
+    // Cascade analysis
+    const cascades = cascadeResults.get(nodeId);
+    if (cascades && cascades.length) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Cascade Analysis</div>`;
+        for (const ca of cascades) {
+            const cls = (ca.classification || '').toUpperCase();
+            const color = cls === 'CASCADE' ? '#d0901d' : '#5cb85c';
+            html += `<div style="margin:6px 0;padding:8px 12px;background:#12121e;border-radius:4px;border-left:3px solid ${color}">
+                <div style="font-size:10px;font-weight:bold;color:${color}">${cls}</div>
+                ${ca.overlap ? `<div style="font-size:10px;color:#b0b0c4;margin-top:3px">${ca.overlap.slice(0,120)}</div>` : ''}
+                ${ca.hires_involved ? `<div style="font-size:9px;color:#6a6a80;margin-top:2px">Hires: ${ca.hires_involved.join(', ')}</div>` : ''}
+                ${ca.reasoning ? `<div style="font-size:9px;color:#8888a0;margin-top:2px">${ca.reasoning.slice(0,150)}</div>` : ''}
+            </div>`;
+        }
+        html += `</div>`;
+    }
+
+    // Children scopes
     if (n.children_scopes && n.children_scopes.length) {
-        html += `<div style="margin-top:14px"><div style="font-size:9px;text-transform:uppercase;color:#6a6a80;letter-spacing:1px;margin-bottom:6px">Delegated to:</div>`;
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Delegated to (${n.children_scopes.length})</div>`;
         for (const s of n.children_scopes) html += `<div style="padding:3px 0;font-size:11px;color:#9090a4">- ${s}</div>`;
+        html += `</div>`;
+    }
+
+    // Followup children (from Turn 2)
+    const myFollowups = followupLinks.filter(f => f.parent === nodeId);
+    if (myFollowups.length) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Continuations (${myFollowups.length})</div>`;
+        for (const f of myFollowups) {
+            const child = nodes.get(f.child);
+            html += `<div style="padding:3px 0;font-size:11px;color:#9b7fe0;cursor:pointer;text-decoration:underline"
+                         onclick="toggleDetail('${f.child}')">
+                [${child?child.position:'?'}] ${child?child.scope.slice(0,60):'followup'}
+            </div>`;
+            if (f.reason) html += `<div style="font-size:10px;color:#8888a0;padding-left:8px">${f.reason.slice(0,80)}</div>`;
+        }
         html += `</div>`;
     }
 
@@ -606,9 +1524,399 @@ function closeDetailOverlay() {
 document.getElementById('detail-backdrop').onclick = closeDetailOverlay;
 
 // === TOOLTIP ===
-function showTooltip(e,d){const t=document.getElementById('tooltip');t.style.display='block';t.innerHTML=`<div style="color:#8b7ff8;font-weight:bold">[${d.position||'ROOT'}]</div><div style="margin-top:4px">${d.scope||'Root'}</div><div style="margin-top:4px;color:#7a7a90">${d.status} | ${d.obs_count} obs</div>`;moveTooltip(e);}
+function showTooltip(e,d){
+    const t=document.getElementById('tooltip');
+    t.style.display='block';
+    const n = nodes.get(d.id);
+    let extra = '';
+    if (d.was_promoted) extra += ' <span style="color:#d0901d">[promoted to manager]</span>';
+    if (d.is_followup) extra += ' <span style="color:#9b7fe0">[continuation]</span>';
+    if (d.turn2_classification) {
+        const cls = d.turn2_classification.toUpperCase();
+        const clsColor = cls.includes('MET')?'#5cb85c':cls.includes('EXHAUSTED')?'#6a9ad0':'#ef6f6f';
+        extra += ` <span style="color:${clsColor}">[${cls}]</span>`;
+    }
+    t.innerHTML=`<div style="color:#8b7ff8;font-weight:bold">[${d.position||'ROOT'}]</div><div style="margin-top:4px">${d.scope||'Root'}</div><div style="margin-top:4px;color:#7a7a90">${d.status} | ${d.obs_count} obs${extra}</div>`;
+    moveTooltip(e);
+}
 function moveTooltip(e){const t=document.getElementById('tooltip');t.style.left=(e.clientX+14)+'px';t.style.top=(e.clientY-10)+'px';}
 function hideTooltip(){document.getElementById('tooltip').style.display='none';}
+
+// === SIMPLE TOOLTIP (for genesis/equip) ===
+function showTooltipSimple(e, text) {
+    const t=document.getElementById('tooltip');
+    t.style.display='block';
+    t.innerHTML=`<div style="color:#8b7ff8">${text}</div>`;
+    moveTooltip(e);
+}
+
+// === EQUIP TOOLTIP ===
+function showEquipTooltip(e) {
+    const t=document.getElementById('tooltip');
+    t.style.display='block';
+    const statusLabel = equipStatus === 'ready' ? 'READY' : equipStatus === 'failed' ? 'CANNOT_PREP' : equipStatus === 'preparing' ? 'preparing...' : 'pending';
+    const statusColor = equipStatus === 'ready' ? '#3da06e' : equipStatus === 'failed' ? '#ef6f6f' : '#30b0b0';
+    let html = `<div style="color:#30b0b0;font-weight:bold">EQUIP</div>`;
+    html += `<div style="margin-top:4px;color:${statusColor}">${statusLabel}</div>`;
+    if (equipNodeId && nodes.has(equipNodeId)) {
+        const en = nodes.get(equipNodeId);
+        if (en.cost) html += `<div style="color:#7a7a90">$${en.cost.toFixed(3)}</div>`;
+    }
+    t.innerHTML = html;
+    moveTooltip(e);
+}
+
+// === EQUIP DETAIL OVERLAY ===
+function showEquipDetail() {
+    if (!equipNodeId || !nodes.has(equipNodeId)) return;
+    const n = nodes.get(equipNodeId);
+    const statusLabel = equipStatus === 'ready' ? 'READY' : equipStatus === 'failed' ? 'CANNOT_PREP' : 'preparing';
+    const statusColor = equipStatus === 'ready' ? '#3da06e' : equipStatus === 'failed' ? '#ef6f6f' : '#30b0b0';
+
+    let html = `<button class="detail-close" onclick="closeDetailOverlay()">&times;</button>`;
+    html += `<div class="detail-title" style="color:#30b0b0">EQUIP</div>`;
+    html += `<div class="detail-scope">Workspace Prep</div>`;
+    html += `<div style="margin-bottom:10px"><span class="detail-badge" style="background:#0e2a2a;color:#30b0b0;border:1px solid #1a3a3a">workspace_prep</span></div>`;
+
+    // Status + cost
+    html += `<div class="detail-meta">
+        <span class="dot" style="background:${statusColor}"></span>${statusLabel}
+        | $${(n.cost||0).toFixed(3)}
+        | ${n.obs_count} obs
+    </div>`;
+
+    // Top observation
+    if (n.top_observation) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Result</div>
+            <div style="font-size:11px;color:#b0b0c4;line-height:1.5">${n.top_observation}</div>
+        </div>`;
+    }
+
+    // SKILL.md content from EQUIP_BRIEFING
+    if (equipBriefingContent) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">SKILL.md</div>
+            <pre style="font-size:10px;line-height:1.5;color:#b0b0c4;background:#0a0a14;padding:12px;border-radius:4px;border:1px solid #1a3a3a;white-space:pre-wrap;overflow-x:auto;max-height:400px;overflow-y:auto">${escapeHtml(equipBriefingContent)}</pre>
+        </div>`;
+    }
+
+    // Observations
+    if (n.observations && n.observations.length) {
+        html += `<div class="detail-section">
+            <div class="detail-section-label">Observations (${n.observations.length})</div>`;
+        for (const obs of n.observations) {
+            const summary = obs.raw_evidence || obs.local_hypothesis || 'Observation';
+            html += `<div class="obs-item" onclick="this.classList.toggle('expanded')">
+                <div class="obs-item-summary">${summary.slice(0,120)}</div>
+                <div class="obs-item-detail">
+                    ${obs.local_hypothesis?`<div><b>Hypothesis:</b> ${obs.local_hypothesis.slice(0,200)}</div>`:''}
+                    ${obs.statistical_grounding?`<div><b>Grounding:</b> ${obs.statistical_grounding.slice(0,200)}</div>`:''}
+                </div>
+            </div>`;
+        }
+        html += `</div>`;
+    }
+
+    document.getElementById('detail-overlay').innerHTML = html;
+    document.getElementById('detail-overlay').classList.add('active');
+    document.getElementById('detail-backdrop').classList.add('active');
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// === PHASE STAGE STRIP ===
+const phaseStageLabels = {
+    catalog: 'Cataloging — surveying the data space at zero cost',
+    genesis: 'Genesis — authoring the engagement charter',
+    equip: 'EQUIP — preparing workspace',
+    exploration: 'Exploration — tree growing, nodes investigating',
+    deep_dive: 'Deep Dive — following high-value threads',
+    validation: 'Validation — skeptical review of findings',
+    significance: 'Scoring — novelty and actionability assessment',
+    impact: 'Impact — real-world consequence assessment',
+};
+function updatePhaseStageStrip(phase) {
+    const strip = document.getElementById('phase-stage-strip');
+    const label = phaseStageLabels[phase] || phase.replace(/_/g,' ').toUpperCase();
+    strip.textContent = label;
+    strip.className = `phase-stage-strip active ${phase}`;
+}
+
+// === BUDGET FLOW ANIMATION ===
+function triggerBudgetFlowAnimation(parentId, childId) {
+    // Find the link element and briefly animate it
+    setTimeout(() => {
+        linkGroup.selectAll('.link').each(function(d) {
+            if (d && d.source && d.target && d.source.data.id === parentId && d.target.data.id === childId) {
+                d3.select(this).classed('budget-flowing', true);
+                setTimeout(() => d3.select(this).classed('budget-flowing', false), 800);
+            }
+        });
+    }, 50);
+}
+
+// === DECOMPOSITION OVERLAY ===
+function showDecompOverlay(nodeId, childrenScopes, reasoning) {
+    const overlay = document.getElementById('decomp-overlay');
+    const n = nodes.get(nodeId);
+    if (!n) return;
+
+    let html = `<div class="decomp-title">[${n.position}] Decomposing</div>`;
+    if (reasoning) {
+        html += `<div style="color:#8888a0;font-size:10px;margin-bottom:6px">${reasoning.slice(0,150)}</div>`;
+    }
+    if (childrenScopes.length) {
+        html += `<div class="decomp-roles">`;
+        for (const scope of childrenScopes.slice(0, 5)) {
+            html += `<div class="decomp-role">+ ${scope.slice(0, 60)}</div>`;
+        }
+        if (childrenScopes.length > 5) html += `<div style="color:#4a4a60">+ ${childrenScopes.length - 5} more</div>`;
+        html += `</div>`;
+    }
+    overlay.innerHTML = html;
+    overlay.classList.add('visible');
+
+    // Add glow class to node in tree
+    nodeGroup.selectAll('.node').filter(d => d.data.id === nodeId).classed('decomposing-glow', true);
+
+    // Auto-fade after 3.5 seconds
+    if (decompOverlayTimer) clearTimeout(decompOverlayTimer);
+    decompOverlayTimer = setTimeout(() => {
+        overlay.classList.remove('visible');
+        nodeGroup.selectAll('.node').classed('decomposing-glow', false);
+    }, 3500);
+}
+
+// === BULLETIN BOARD PANEL ===
+function renderBbPost(post) {
+    const container = document.getElementById('bb-posts-container');
+    const card = document.createElement('div');
+    card.className = `bb-post-card type-${post.post_type}`;
+    card.id = `bb-post-${post.post_id}`;
+    card.onclick = function() { this.classList.toggle('expanded'); };
+
+    const typeClass = post.post_type || 'OBSERVATION';
+    const authorNode = nodes.get(post.author_node_id);
+    const authorLabel = post.author_role_name || (authorNode ? authorNode.role_name : '') || post.author_node_id || '';
+
+    // EQUIP_BRIEFING gets a "BRIEFING" badge instead of the raw type
+    const badgeLabel = typeClass === 'EQUIP_BRIEFING' ? 'BRIEFING' : typeClass;
+
+    card.innerHTML = `
+        <div>
+            <span class="bb-post-type ${typeClass}">${badgeLabel}</span>
+            <span class="bb-post-author">${authorLabel}</span>
+        </div>
+        <div class="bb-post-content">${(post.content || '').slice(0, 120)}</div>
+        <div class="bb-post-detail">
+            <div style="margin-bottom:4px${typeClass === 'EQUIP_BRIEFING' ? ';white-space:pre-wrap;font-size:10px' : ''}">${post.content || ''}</div>
+            ${post.references && post.references.length ? `<div style="color:#6a6a80">refs: ${post.references.join(', ')}</div>` : ''}
+            <div style="color:#4a4a60;margin-top:4px">node: ${post.author_node_id || '?'}</div>
+            <div class="bb-pulls-area" id="bb-pulls-${post.post_id}"></div>
+        </div>`;
+    // EQUIP_BRIEFING goes at the top of the list
+    if (typeClass === 'EQUIP_BRIEFING' && container.firstChild) {
+        container.insertBefore(card, container.firstChild);
+    } else {
+        container.appendChild(card);
+    }
+    container.scrollTop = typeClass === 'EQUIP_BRIEFING' ? 0 : container.scrollHeight;
+}
+
+function renderBbPull(pull) {
+    const area = document.getElementById(`bb-pulls-${pull.post_id}`);
+    if (!area) return;
+    const marker = document.createElement('span');
+    marker.className = `bb-pull-marker${pull.influence ? ' influenced' : ''}`;
+    const pullerNode = nodes.get(pull.pulling_node_id);
+    const pullerLabel = pullerNode ? `[${pullerNode.position}]` : pull.pulling_node_id.slice(0, 8);
+    marker.textContent = `pulled by ${pullerLabel}${pull.influence ? ' *' : ''}`;
+    area.appendChild(marker);
+    area.appendChild(document.createTextNode(' '));
+}
+
+// Load workspace_state.json for playback
+async function loadWorkspaceState(eventsUrl) {
+    // Try to load workspace_state.json from same directory as events file
+    try {
+        const dir = eventsUrl.substring(0, eventsUrl.lastIndexOf('/'));
+        const resp = await fetch(`${dir}/workspace_state.json`);
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.posts) {
+                for (const p of data.posts) {
+                    if (p.post_type === 'EQUIP_BRIEFING') equipBriefingContent = p.content || '';
+                    bbPostsList.push(p);
+                    renderBbPost(p);
+                }
+                bbPosts = data.posts.length;
+                document.getElementById('bb-posts-label').textContent = `${bbPosts} posts`;
+                document.getElementById('bb-count').textContent = bbPosts;
+            }
+            if (data.pulls) {
+                for (const pull of data.pulls) {
+                    bbPullsList.push(pull);
+                    renderBbPull(pull);
+                    if (pull.influence) {
+                        const post = bbPostsList.find(p => p.post_id === pull.post_id);
+                        if (post && post.author_node_id && pull.pulling_node_id) {
+                            lateralEdges.push({ source_node_id: post.author_node_id, target_node_id: pull.pulling_node_id });
+                        }
+                    }
+                }
+            }
+        }
+    } catch(e) { /* workspace_state.json not available — that's fine */ }
+}
+
+// Load knowledge_graph.json for playback
+async function loadKnowledgeGraph(eventsUrl) {
+    try {
+        const dir = eventsUrl.substring(0, eventsUrl.lastIndexOf('/'));
+        const resp = await fetch(`${dir}/knowledge_graph.json`);
+        if (resp.ok) {
+            const data = await resp.json();
+            if (data.entities) {
+                for (const e of data.entities) {
+                    kgNodes.push({
+                        id: e.name, name: e.name,
+                        type: e.entity_type || 'unknown',
+                        observation_count: e.observation_count || 1,
+                        first_observed_run: e.first_observed_run || '',
+                        last_observed_run: e.last_observed_run || '',
+                    });
+                }
+                kgEntities = kgNodes.length;
+                document.getElementById('kg-entities').textContent = kgEntities;
+                document.getElementById('kg-count').textContent = kgEntities;
+            }
+            if (data.relationships) {
+                for (const r of data.relationships) {
+                    kgEdges.push({
+                        source: r.from_name, target: r.to_name,
+                        relationship_type: r.relationship_type || '',
+                    });
+                }
+                kgRelations = kgEdges.length;
+                document.getElementById('kg-relations').textContent = kgRelations;
+            }
+            updateKgGraph();
+        }
+    } catch(e) { /* knowledge_graph.json not available */ }
+}
+
+// === KNOWLEDGE GRAPH FORCE-DIRECTED VISUALIZATION ===
+const kgEntityColors = {
+    package: '#4a7ab0', maintainer: '#3da06e', finding: '#d0901d',
+    organization: '#9b7fe0', vulnerability: '#ef6f6f', ecosystem: '#5cb85c',
+    company: '#6a9ad0', filing: '#d0a040', person: '#3da06e',
+    unknown: '#4a4a60',
+};
+function kgColor(type) {
+    const t = (type || 'unknown').toLowerCase();
+    for (const [key, color] of Object.entries(kgEntityColors)) {
+        if (t.includes(key)) return color;
+    }
+    return kgEntityColors.unknown;
+}
+
+function updateKgGraph() {
+    if (!kgNodes.length) return;
+    const svgEl = document.getElementById('kg-graph-svg');
+    const width = svgEl.clientWidth || 340;
+    const height = svgEl.clientHeight || 340;
+    const kgSvg = d3.select('#kg-graph-svg');
+
+    // Filter edges to only those with existing nodes
+    const nodeIds = new Set(kgNodes.map(n => n.id));
+    const validEdges = kgEdges.filter(e => nodeIds.has(e.source) || nodeIds.has(e.source.id || e.source))
+        .filter(e => nodeIds.has(e.target) || nodeIds.has(e.target.id || e.target));
+
+    // Restart simulation
+    if (kgSimulation) kgSimulation.stop();
+
+    kgSimulation = d3.forceSimulation(kgNodes)
+        .force('link', d3.forceLink(validEdges).id(d => d.id).distance(60))
+        .force('charge', d3.forceManyBody().strength(-80))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(12));
+
+    kgSvg.selectAll('*').remove();
+    const kgG = kgSvg.append('g');
+
+    // Zoom for KG
+    kgSvg.call(d3.zoom().scaleExtent([0.3, 3]).on('zoom', e => kgG.attr('transform', e.transform)));
+
+    // Edges
+    const link = kgG.selectAll('.kg-edge-line').data(validEdges)
+        .enter().append('line').attr('class', 'kg-edge-line');
+
+    // Edge labels
+    const edgeLabel = kgG.selectAll('.kg-edge-label').data(validEdges)
+        .enter().append('text').attr('class', 'kg-edge-label')
+        .text(d => (d.relationship_type || '').slice(0, 15));
+
+    // Nodes
+    const node = kgG.selectAll('.kg-node-g').data(kgNodes)
+        .enter().append('g').attr('class', 'kg-node-g')
+        .call(d3.drag()
+            .on('start', (e, d) => { if (!e.active) kgSimulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+            .on('end', (e, d) => { if (!e.active) kgSimulation.alphaTarget(0); d.fx = null; d.fy = null; })
+        );
+
+    node.append('circle').attr('class', 'kg-node-circle')
+        .attr('r', d => Math.max(4, Math.min(12, 3 + (d.observation_count || 1) * 1.5)))
+        .attr('fill', d => kgColor(d.type))
+        .attr('stroke', d => kgColor(d.type)).attr('stroke-width', 1).attr('fill-opacity', 0.7)
+        .on('click', (e, d) => showKgProvenance(e, d));
+
+    node.append('text').attr('class', 'kg-node-label')
+        .attr('dy', d => Math.max(4, 3 + (d.observation_count || 1) * 1.5) + 10)
+        .text(d => d.name.length > 16 ? d.name.slice(0, 14) + '..' : d.name);
+
+    kgSimulation.on('tick', () => {
+        link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+        edgeLabel.attr('x', d => (d.source.x + d.target.x) / 2)
+            .attr('y', d => (d.source.y + d.target.y) / 2);
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+}
+
+function showKgProvenance(event, entity) {
+    const popup = document.getElementById('kg-provenance-popup');
+    let html = `<div style="color:#8b7ff8;font-weight:bold;margin-bottom:6px">${entity.name}</div>`;
+    html += `<div style="color:#8888a0">Type: ${entity.type || 'unknown'}</div>`;
+    html += `<div style="color:#8888a0">Observations: ${entity.observation_count || 0}</div>`;
+    if (entity.first_observed_run) html += `<div style="color:#6a6a80;margin-top:4px">First seen: ${entity.first_observed_run}</div>`;
+    if (entity.last_observed_run) html += `<div style="color:#6a6a80">Last seen: ${entity.last_observed_run}</div>`;
+    // Find relationships
+    const rels = kgEdges.filter(e => (e.source.id || e.source) === entity.id || (e.target.id || e.target) === entity.id);
+    if (rels.length) {
+        html += `<div style="color:#6a6a80;margin-top:6px">${rels.length} relationships</div>`;
+        for (const r of rels.slice(0, 5)) {
+            const other = (r.source.id || r.source) === entity.id ? (r.target.name || r.target.id || r.target) : (r.source.name || r.source.id || r.source);
+            html += `<div style="color:#4a4a60;font-size:9px">- ${r.relationship_type} -> ${other}</div>`;
+        }
+    }
+    popup.innerHTML = html;
+    popup.classList.add('visible');
+    popup.style.left = (event.clientX + 10) + 'px';
+    popup.style.top = (event.clientY - 10) + 'px';
+    // Close on next click anywhere
+    setTimeout(() => {
+        document.addEventListener('click', function closePopup() {
+            popup.classList.remove('visible');
+            document.removeEventListener('click', closePopup);
+        }, { once: true });
+    }, 50);
+}
 
 // === SUMMARY ===
 function showSummary() {
@@ -625,9 +1933,9 @@ function showSummary() {
 // === PLAYBACK ===
 let playbackSpeed=10,playbackPaused=false,playbackEvents=[],playbackIndex=0,playbackResolve=null;
 function togglePause(){playbackPaused=!playbackPaused;document.getElementById('play-btn').textContent=playbackPaused?'Play':'Pause';if(!playbackPaused&&playbackResolve){playbackResolve();playbackResolve=null;}}
-function setSpeed(v){playbackSpeed=parseInt(v);}
+function setSpeed(v){playbackSpeed=parseFloat(v);}
 function scrubTo(pct){if(!playbackEvents.length)return;resetState();const t=Math.floor(pct/100*playbackEvents.length);for(let i=0;i<=t&&i<playbackEvents.length;i++)handleEvent(playbackEvents[i]);playbackIndex=t;}
-function resetState(){nodes.clear();totalNodes=0;totalObs=0;maxDepth=0;totalFindings=0;selectedNodeId=null;headlineFindings=[];significantFindings=[];document.getElementById('stat-nodes').textContent='0';document.getElementById('stat-obs').textContent='0';document.getElementById('stat-depth').textContent='0';document.getElementById('stat-findings').textContent='0';document.getElementById('log-body').innerHTML='';linkGroup.selectAll('*').remove();nodeGroup.selectAll('*').remove();}
+function resetState(){nodes.clear();totalNodes=0;totalObs=0;maxDepth=0;totalFindings=0;selectedNodeId=null;headlineFindings=[];significantFindings=[];followupLinks=[];kgEntities=0;kgRelations=0;bbPosts=0;currentPhase='';bbPostsList.length=0;bbPullsList.length=0;kgNodes.length=0;kgEdges.length=0;lateralEdges.length=0;budgetAllocations.clear();cascadeResults.clear();equipNodeId=null;equipStatus='placeholder';equipBriefingContent='';document.getElementById('stat-nodes').textContent='0';document.getElementById('stat-obs').textContent='0';document.getElementById('stat-depth').textContent='0';document.getElementById('stat-findings').textContent='0';document.getElementById('log-body').innerHTML='';document.getElementById('kg-entities').textContent='0';document.getElementById('kg-relations').textContent='0';document.getElementById('kg-count').textContent='0';document.getElementById('bb-posts-label').textContent='0 posts';document.getElementById('bb-count').textContent='0';document.getElementById('bb-posts-container').innerHTML='';document.getElementById('phase-stage-strip').className='phase-stage-strip';document.getElementById('phase-stage-strip').textContent='';linkGroup.selectAll('*').remove();nodeGroup.selectAll('*').remove();if(kgSimulation){kgSimulation.stop();kgSimulation=null;}d3.select('#kg-graph-svg').selectAll('*').remove();}
 async function startPlayback(data){isPlayback=true;playbackEvents=data;document.getElementById('playback-bar').classList.add('active');if(!data.length)return;const dur=data[data.length-1].elapsed_ms||1;for(let i=playbackIndex;i<data.length;i++){if(playbackPaused)await new Promise(r=>{playbackResolve=r;});playbackIndex=i;handleEvent(data[i]);document.getElementById('scrub').value=(i/data.length*100).toFixed(0);document.getElementById('playback-time').textContent=`${formatTime(data[i].elapsed_ms||0)} / ${formatTime(dur)}`;const next=data[i+1];if(next)await sleep(Math.min(((next.elapsed_ms||0)-(data[i].elapsed_ms||0))/playbackSpeed,2000));}finalizeAll();}
 function formatTime(ms){const s=Math.floor(ms/1000),m=Math.floor(s/60);return`${m}:${String(s%60).padStart(2,'0')}`;}
 function sleep(ms){return new Promise(r=>setTimeout(r,Math.max(0,ms)));}
@@ -781,7 +2089,18 @@ async function init(){
     const eventsUrl=params.get('events');
     if(eventsUrl){
         document.getElementById('source-info').textContent='Loading recording...';
-        try{const resp=await fetch(eventsUrl);const text=await resp.text();const events=text.trim().split('\n').map(l=>JSON.parse(l));document.getElementById('source-info').textContent=`Playback: ${events.length} events`;startPlayback(events);}
+        try{
+            // Load supplementary files in parallel with events
+            const [evtResp] = await Promise.all([
+                fetch(eventsUrl),
+                loadWorkspaceState(eventsUrl),
+                loadKnowledgeGraph(eventsUrl),
+            ]);
+            const text=await evtResp.text();
+            const events=text.trim().split('\n').map(l=>JSON.parse(l));
+            document.getElementById('source-info').textContent=`Playback: ${events.length} events`;
+            startPlayback(events);
+        }
         catch(e){document.getElementById('source-info').textContent=`Error: ${e.message}`;}
     } else { connectWS(); }
 }

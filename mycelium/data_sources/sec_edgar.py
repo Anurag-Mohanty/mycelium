@@ -27,6 +27,7 @@ class SecEdgarSource(DataSource):
     """Connector for SEC EDGAR filings."""
 
     def __init__(self):
+        super().__init__()
         self.client = httpx.AsyncClient(
             timeout=30.0,
             headers={"User-Agent": USER_AGENT},

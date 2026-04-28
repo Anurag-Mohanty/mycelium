@@ -11,7 +11,9 @@ USE_ROLE_AUTHORING_PATH is set. Does not modify the existing worker.
 
 import asyncio
 import json
+import time
 import uuid
+from pathlib import Path
 import anthropic
 from .schemas import Directive, Observation, Source, NodeResult, Scope, RoleDefinition
 from . import prompts as _prompts
@@ -28,7 +30,8 @@ class RoleWorkerNode:
                  semaphore: asyncio.Semaphore = None, budget_pool=None,
                  parent_pool_available: float = 0.0,
                  depth: int = 0, max_depth: int = 6,
-                 leaf_viable_envelope: float = 0.12):
+                 leaf_viable_envelope: float = 0.12,
+                 bulletin_board=None, partition_gate: str = "off"):
         self.directive = directive
         self.data_source = data_source
         self.budget = budget
@@ -48,6 +51,10 @@ class RoleWorkerNode:
         self._workspace_path = directive.workspace_path
         self._role = directive.role or RoleDefinition()
 
+        self._bulletin_board = bulletin_board
+        self._partition_gate = partition_gate
+        self._board_pull_timestamp = 0.0  # track last pull time for delta pulls
+
         self.observations = []
         self.child_workers = []
         self.child_results = []
@@ -57,6 +64,112 @@ class RoleWorkerNode:
         self.token_usage = {"input_tokens": 0, "output_tokens": 0}
         self.status = "created"
         self._diagnostics = {}
+        self._broadcast_post_ids = []  # post_ids this node broadcast
+
+    # === Bulletin board helpers ===
+
+    def _pull_board(self, since: float = 0.0) -> str:
+        """Pull posts from the bulletin board and format for prompt.
+        Returns formatted string of posts, or empty string if no board."""
+        if not self._bulletin_board:
+            return ""
+        if since > 0:
+            posts = self._bulletin_board.get_posts_since(since, exclude_author=self.node_id)
+        else:
+            posts = self._bulletin_board.get_posts(exclude_author=self.node_id)
+        if not posts:
+            return ""
+        # Record pull events (influence determined later by reasoning trace)
+        for p in posts:
+            self._bulletin_board.pull(self.node_id, p["post_id"])
+        self._board_pull_timestamp = time.time()
+        return self._bulletin_board.format_for_prompt(posts)
+
+    def _broadcast_observations(self, broadcasts: list[dict]):
+        """Post selected observations to the bulletin board."""
+        if not self._bulletin_board or not broadcasts:
+            return
+        for b in broadcasts:
+            post_type = b.get("post_type", "OBSERVATION")
+            if post_type not in ("OBSERVATION", "HYPOTHESIS", "DEAD_END"):
+                post_type = "OBSERVATION"
+            content = b.get("content", "")
+            if not content:
+                continue
+            references = b.get("references", [])
+            post_id = self._bulletin_board.post(
+                author_node_id=self.node_id,
+                author_role_name=self._role.name,
+                post_type=post_type,
+                content=content,
+                references=references if isinstance(references, list) else [],
+            )
+            self._broadcast_post_ids.append(post_id)
+        if self._broadcast_post_ids:
+            events.emit("bb_post", {
+                "node_id": self.node_id,
+                "post_count": len(self._broadcast_post_ids),
+            })
+
+    def _update_pull_influence(self):
+        """Scan reasoning trace for semantic references to pulled posts."""
+        if not self._bulletin_board:
+            return
+        # Collect all reasoning text
+        reasoning_text = ""
+        for entry in self.thinking_log:
+            reasoning_text += entry.get("thinking", "") + "\n"
+        if hasattr(self, '_last_result') and isinstance(self._last_result, dict):
+            reasoning_text += json.dumps(self._last_result, default=str)
+
+        if not reasoning_text:
+            return
+
+        reasoning_lower = reasoning_text.lower()
+
+        for pull in self._bulletin_board.pulls:
+            if pull["pulling_node_id"] != self.node_id:
+                continue
+            if pull["influence"]:
+                continue
+
+            # Level 1: literal post_id match
+            if pull["post_id"] in reasoning_text:
+                pull["influence"] = True
+                continue
+
+            # Level 2: semantic content match — check if key phrases from the
+            # post appear in the reasoning trace
+            post = next((p for p in self._bulletin_board.posts
+                        if p["post_id"] == pull["post_id"]), None)
+            if not post:
+                continue
+
+            post_content = post.get("content", "")
+            if not post_content or len(post_content) < 20:
+                continue
+
+            # Extract distinctive phrases (3+ word sequences) from post
+            # and check if any appear in reasoning
+            words = post_content.split()
+            matched = False
+            for i in range(min(len(words) - 4, 20)):  # Check first 20 windows
+                phrase = " ".join(words[i:i+4]).lower()
+                # Skip generic phrases
+                if any(g in phrase for g in ["the ", "this ", "that ", "with ", "from "]):
+                    continue
+                if phrase in reasoning_lower:
+                    pull["influence"] = True
+                    matched = True
+                    break
+
+            if not matched:
+                # Check for bulletin board generic references near post-specific content
+                if "bulletin board" in reasoning_lower or "board shows" in reasoning_lower:
+                    # Worker referenced the board — check if post author or key entity appears
+                    author = post.get("author_role_name", "").lower()
+                    if author and len(author) > 5 and author in reasoning_lower:
+                        pull["influence"] = True
 
     @property
     def envelope(self) -> float:
@@ -180,13 +293,15 @@ class RoleWorkerNode:
                 heuristic=role_data.get("heuristic", ""),
             )
 
-            # Build child directive — data assignment from hire reasoning
+            # Build child directive — partition (preferred) or data_filter (legacy)
+            child_partition = hd.get("partition", "")
             child_filters = hd.get("data_filter", {})
-            if not child_filters or not isinstance(child_filters, dict):
-                # No data assignment authored — fall back to parent's data
-                # This is a reasoning gap: the manager didn't partition
+            if not child_partition and (not child_filters or not isinstance(child_filters, dict)):
+                # No partition or data_filter authored — fall back to parent's
                 child_filters = self.directive.data_filter or self.directive.scope.filters
-                self._log(f"  Hire '{role.name}': no data_filter authored, inheriting parent scope")
+                child_partition = self.directive.partition
+                if not child_partition:
+                    self._log(f"  Hire '{role.name}': no partition authored, inheriting parent scope")
 
             child_directive = Directive(
                 scope=Scope(
@@ -198,6 +313,7 @@ class RoleWorkerNode:
                 parent_context=hd.get("parent_context", ""),
                 purpose=hd.get("purpose", ""),
                 data_filter=child_filters,
+                partition=child_partition,
                 node_id=str(uuid.uuid4()),
                 parent_id=self.node_id,
                 tree_position=f"{self.pos}.{i}" if self.pos != "ROOT" else str(i),
@@ -220,8 +336,49 @@ class RoleWorkerNode:
                 depth=self.depth + 1,
                 max_depth=self.max_depth,
                 leaf_viable_envelope=self.leaf_viable_envelope,
+                bulletin_board=self._bulletin_board,
+                partition_gate=self._partition_gate,
             )
             self.child_workers.append(child)
+
+        # --- MECE Partition Gate ---
+        if self.child_workers and self._partition_gate in ("on", "off"):
+            from .partition_gate import check_mece
+            child_parts = [
+                {"role_name": c._role.name, "partition_desc": c.directive.partition,
+                 "tree_position": c.pos}
+                for c in self.child_workers
+            ]
+            try:
+                gate_result = await check_mece(
+                    parent_partition=self.directive.partition or None,
+                    child_partitions=child_parts,
+                    data_source=self.data_source,
+                    run_dir=str(Path(self._workspace_path).parent) if self._workspace_path else None,
+                    parent_node_id=self.node_id,
+                    parent_tree_pos=self.pos,
+                )
+                self.spent += gate_result.get("cost", 0)
+                events.emit("partition_gate", {
+                    "node_id": self.node_id, "tree_position": self.pos,
+                    "verdict": gate_result["verdict"],
+                    "completeness_pct": gate_result["completeness"]["coverage_pct"],
+                    "exclusivity_overlaps": len(gate_result["exclusivity"].get("overlapping_pairs", [])),
+                    "shape_failures": len(gate_result["shape"]["failures"]),
+                })
+                if self._partition_gate == "on" and gate_result["verdict"] == "FAIL":
+                    self._log(f"PARTITION GATE HALTED: {gate_result['failure_reasons']}")
+                    self.status = "resolved"
+                    self.child_workers = []
+                    events.emit("node_resolved", {
+                        "node_id": self.node_id, "tree_position": self.pos,
+                        "observations_count": len(self.observations),
+                        "cost_spent": self.spent,
+                        "top_observation": "PARTITION GATE HALTED",
+                    })
+                    return self._result()
+            except Exception as e:
+                self._log(f"Partition gate error (continuing): {e}")
 
         if not self.child_workers:
             self.status = "resolved"
@@ -260,6 +417,9 @@ class RoleWorkerNode:
                 turn2_obs = self._parse_observations(turn2_result.get("observations", []))
                 self.observations.extend(turn2_obs)
 
+        # Check if pulled posts influenced reasoning
+        self._update_pull_influence()
+
         self.status = "resolved"
         total_obs = len(self.observations) + n_obs
         events.emit("node_resolved", {
@@ -294,12 +454,21 @@ class RoleWorkerNode:
                         if isinstance(t, dict):
                             followups += f"    - {t.get('what_to_investigate', '?')[:100]}\n"
 
+            partition_info = ""
+            if child.directive.partition:
+                interp = getattr(child, '_translation_interpretation', '')
+                partition_info = (
+                    f"PARTITION: {child.directive.partition[:200]}\n"
+                    f"TRANSLATION: {interp[:200]}\n"
+                )
+
             hire_reports_parts.append(
                 f"--- HIRE: {role.name} ---\n"
                 f"AUTHORED MISSION: {role.mission}\n"
                 f"AUTHORED BAR: {role.success_bar}\n"
                 f"AUTHORED HEURISTIC: {role.heuristic}\n"
                 f"SCOPE: {child.directive.scope.description[:200]}\n"
+                f"{partition_info}"
                 f"ACTUAL COST: ${child.spent:.3f} (of ${child.budget:.3f} allocated)\n"
                 f"OBSERVATIONS ({len(child_obs)}):\n{obs_text}"
                 f"SELF-EVALUATION: bar_met={child_metrics.get('bar_met', '?')}, "
@@ -347,6 +516,15 @@ class RoleWorkerNode:
             f"available for continuation\n"
         )
 
+        # Board context for cascade detection
+        board_text = self._pull_board()
+        board_context = ""
+        if board_text:
+            board_context = (
+                f"BULLETIN BOARD ({len(self._bulletin_board.posts)} posts):\n"
+                f"{board_text}"
+            )
+
         import datetime
         prompt = _prompts.MANAGER_TURN2_PROMPT_V2.format(
             budget_remaining=remaining,
@@ -355,6 +533,7 @@ class RoleWorkerNode:
             role_bar=self._role.success_bar,
             scope_description=self.directive.scope.description[:500],
             workspace_context=workspace_context,
+            board_context=board_context,
             hire_reports=hire_reports,
             cost_context=cost_context,
         )
@@ -418,9 +597,11 @@ class RoleWorkerNode:
                 heuristic=role_data.get("heuristic", ""),
             )
 
+            child_partition = cd.get("partition", "")
             child_filters = cd.get("data_filter", {})
-            if not child_filters or not isinstance(child_filters, dict):
+            if not child_partition and (not child_filters or not isinstance(child_filters, dict)):
                 child_filters = self.directive.data_filter or self.directive.scope.filters
+                child_partition = self.directive.partition
 
             child_directive = Directive(
                 scope=Scope(
@@ -432,6 +613,7 @@ class RoleWorkerNode:
                 parent_context=cd.get("parent_context", ""),
                 purpose=cd.get("purpose", ""),
                 data_filter=child_filters,
+                partition=child_partition,
                 node_id=str(uuid.uuid4()),
                 parent_id=self.node_id,
                 tree_position=f"{self.pos}.C{i}",
@@ -453,6 +635,8 @@ class RoleWorkerNode:
                 depth=self.depth + 1,
                 max_depth=self.max_depth,
                 leaf_viable_envelope=self.leaf_viable_envelope,
+                bulletin_board=self._bulletin_board,
+                partition_gate=self._partition_gate,
             )
 
             self._log(f"Spawning continuation: {role.name} (${cont_budget:.2f})")
@@ -466,6 +650,9 @@ class RoleWorkerNode:
         self.observations = self._parse_observations(result.get("observations", []))
         self.metrics = result.get("self_evaluation", {})
         self._formation_summary = result.get("formation_assessment", {})
+
+        # Broadcast selected observations to the bulletin board
+        self._broadcast_observations(result.get("broadcasts", []))
 
         n_obs = len(self.observations)
         remaining = max(0, self.budget - self.spent)
@@ -484,6 +671,9 @@ class RoleWorkerNode:
                 elif decision == "HIRE" and post_reassess_remaining >= self.leaf_viable_envelope * 2:
                     self._log(f"HIRING from investigation ({n_obs} initial obs, ${post_reassess_remaining:.2f} remaining)")
                     return await self._become_manager(reassessment, result)
+
+        # Check if pulled posts influenced reasoning
+        self._update_pull_influence()
 
         # Resolve with current observations
         self.status = "resolved"
@@ -519,6 +709,15 @@ class RoleWorkerNode:
         remaining = max(0, self.budget - self.spent)
         min_hire_budget = self.leaf_viable_envelope * 2
 
+        # Pull new posts since formation
+        board_text = self._pull_board(since=self._board_pull_timestamp)
+        board_context = ""
+        if board_text:
+            board_context = (
+                f"NEW BULLETIN BOARD POSTS (since your formation):\n"
+                f"{board_text}"
+            )
+
         prompt = _prompts.WORKER_REASSESSMENT_PROMPT_V2.format(
             role_name=self._role.name,
             role_mission=self._role.mission or "Produce the most insightful findings this data can yield.",
@@ -531,6 +730,7 @@ class RoleWorkerNode:
             budget_remaining=remaining,
             leaf_viable_envelope=self.leaf_viable_envelope,
             min_hire_budget=min_hire_budget,
+            board_context=board_context,
         )
 
         # Budget gate
@@ -581,9 +781,13 @@ class RoleWorkerNode:
 
         # Re-fetch data (same filters, worker sees same records for deeper analysis)
         filters = dict(self.directive.data_filter or self.directive.scope.filters)
-        schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
-        if schema and filters:
-            valid_params = set(schema.keys())
+        if "slice" in filters:
+            slice_desc = filters.pop("slice")
+            if isinstance(slice_desc, str) and slice_desc.strip():
+                translated = await self._translate_slice(slice_desc)
+                filters.update(translated)
+        if hasattr(self.data_source, 'valid_filter_params'):
+            valid_params = self.data_source.valid_filter_params()
             filters = {k: v for k, v in filters.items() if k in valid_params}
         documents = await self.data_source.fetch(filters, max_results=100)
         fetched_data = _format_documents(documents) if documents else "(no data)"
@@ -625,6 +829,12 @@ class RoleWorkerNode:
         extended_obs = self._parse_observations(result.get("extended_observations", []))
         self.observations.extend(extended_obs)
         self._log(f"  Extended: +{len(extended_obs)} observations (total {len(self.observations)})")
+
+        # Broadcast from extension
+        self._broadcast_observations(result.get("broadcasts", []))
+
+        # Check if pulled posts influenced reasoning
+        self._update_pull_influence()
 
         # Update metrics from extension self-eval
         ext_eval = result.get("self_evaluation", {})
@@ -698,26 +908,212 @@ class RoleWorkerNode:
         })
         return self._result()
 
+    # === Scope-fit check ===
+
+    async def _check_scope_fit(self, documents: list) -> str:
+        """Check if fetched records match the partition intent.
+
+        Returns: 'MATCH', 'PARTIAL', or 'MISMATCH'.
+        """
+        # Sample a few records for the check
+        sample = documents[:5]
+        sample_text = ""
+        for i, doc in enumerate(sample, 1):
+            if isinstance(doc, dict):
+                sample_text += f"  Record {i}: {json.dumps(doc, default=str)[:200]}\n"
+
+        prompt = (
+            f"Do these records match the intended data partition?\n\n"
+            f"SCOPE: {self.directive.scope.description[:200]}\n"
+            f"PARTITION: {self.directive.partition}\n"
+            f"TRANSLATOR INTERPRETATION: {self._translation_interpretation}\n\n"
+            f"SAMPLE RECORDS ({len(sample)} of {len(documents)}):\n{sample_text}\n"
+            f"Verdict: MATCH (records fit the partition intent), "
+            f"PARTIAL (some fit, some don't), or "
+            f"MISMATCH (records clearly don't match the partition).\n\n"
+            f"Return JSON: {{\"verdict\": \"MATCH|PARTIAL|MISMATCH\", \"reasoning\": \"one sentence\"}}"
+        )
+
+        try:
+            async with self._semaphore:
+                client = anthropic.AsyncAnthropic()
+                response = await client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=200,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+            cost = (response.usage.input_tokens * 3 / 1_000_000 +
+                    response.usage.output_tokens * 15 / 1_000_000)
+            self.spent += cost
+            if self._budget_pool:
+                self._budget_pool.record("overhead", cost)
+
+            raw = response.content[0].text.strip()
+            parsed = json.loads(raw) if raw.startswith("{") else json.loads(
+                raw[raw.find("{"):raw.rfind("}") + 1])
+            verdict = parsed.get("verdict", "MATCH")
+            self._log(f"  Scope-fit: {verdict} — {parsed.get('reasoning', '')[:80]}")
+            return verdict
+        except Exception as e:
+            self._log(f"  Scope-fit check failed: {e}, assuming MATCH")
+            return "MATCH"
+
+    # === Slice translation ===
+
+    async def _translate_slice(self, slice_desc: str) -> dict:
+        """Translate a natural-language slice description to catalog query fields.
+
+        Uses a small LLM call. Returns a dict of catalog field conditions.
+        On failure, returns {"keyword": <first few words of slice>} as fallback.
+        """
+        schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
+        # Find the catalog fields description
+        cat_info = schema.get("catalog_fields", {})
+        cat_desc = cat_info.get("description", "") if cat_info else ""
+
+        if not cat_desc:
+            # No catalog fields available — fall back to keyword
+            return {"keyword": " ".join(slice_desc.split()[:3])}
+
+        prompt = (
+            f"Translate this natural-language data slice description into catalog query fields.\n\n"
+            f"Slice description: {slice_desc}\n\n"
+            f"Available catalog fields and operators:\n{cat_desc}\n\n"
+            f"Return ONLY a JSON object with field names as keys and values/operators as values.\n"
+            f"Example: {{\"monthly_downloads\": {{\"gt\": 1000000}}, \"maintainer_count\": 1}}\n"
+            f"Use only field names from the list above. Return valid JSON, nothing else."
+        )
+
+        try:
+            client = anthropic.AsyncAnthropic()
+            response = await client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text.strip()
+            slice_cost = (response.usage.input_tokens * 3 / 1_000_000 +
+                          response.usage.output_tokens * 15 / 1_000_000)
+            self.spent += slice_cost
+            if self._budget_pool:
+                self._budget_pool.record("overhead", slice_cost)
+
+            # Parse JSON from response
+            result = json.loads(raw) if raw.startswith("{") else json.loads(
+                raw[raw.find("{"):raw.rfind("}") + 1])
+            self._log(f"Slice translated: '{slice_desc[:50]}' → {result}")
+            return result
+        except Exception as e:
+            self._log(f"Slice translation failed: {e}. Falling back to keyword.")
+            return {"keyword": " ".join(slice_desc.split()[:3])}
+
     # === LLM Call ===
 
     async def _reason(self) -> dict | None:
         """Single LLM call with formation-time assessment."""
-        # Fetch data
-        filters = dict(self.directive.data_filter or self.directive.scope.filters)
-        schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
-        if schema and filters:
-            valid_params = set(schema.keys())
-            unknown = [k for k in filters if k not in valid_params]
-            if unknown:
-                self._log(f"Filter validation: unknown params {unknown} removed")
-                filters = {k: v for k, v in filters.items() if k in valid_params}
+        # Engagement lead (depth 0) gets corpus metadata, not sample records.
+        # This prevents scope confusion where it reasons about 100 records
+        # as if they were the full corpus.
+        if self.depth == 0 and not self.directive.partition:
+            cat_meta = self.data_source.catalog_metadata() if hasattr(self.data_source, 'catalog_metadata') else {}
+            total = cat_meta.get("total_records", 0)
+            fields = cat_meta.get("fields", [])
+            field_summary = ", ".join(f["name"] for f in fields[:10])
+            documents = [{
+                "_corpus_metadata": True,
+                "total_records": total,
+                "fields": field_summary,
+                "note": (f"This is corpus metadata, not sample records. "
+                         f"The corpus contains {total:,} records with fields: {field_summary}. "
+                         f"You are the engagement lead — your job is to design the team, "
+                         f"not analyze records directly. Hire specialists and partition "
+                         f"the corpus across them."),
+            }]
+            # Skip partition/filter paths — go straight to prompt construction
+            self._translation_interpretation = ""
+            # Jump past the data-fetching block
+            fetched_data = _format_documents(documents)
+            return await self._reason_with_data(documents, fetched_data)
 
-        documents = await self.data_source.fetch(filters, max_results=100)
+        # Fetch data — partition path or legacy filter path
+        documents = None
+        self._translation_interpretation = ""
+
+        if self.directive.partition:
+            # Partition path: translate natural-language description via EQUIP translator
+            from .translator import translate_partition
+            run_dir = str(Path(self._workspace_path).parent) if self._workspace_path else None
+            translation = await translate_partition(
+                partition=self.directive.partition,
+                data_source=self.data_source,
+                max_records=100,
+                run_dir=run_dir,
+                hire_id=self.node_id[:8],
+            )
+            self.spent += translation.cost
+            if self._budget_pool:
+                self._budget_pool.record("overhead", translation.cost)
+
+            if translation.success and translation.records:
+                documents = translation.records
+                self._translation_interpretation = translation.interpretation
+                self._log(f"Partition translated: '{self.directive.partition[:50]}' → "
+                          f"{translation.record_count} records (${translation.cost:.3f})")
+            else:
+                self._log(f"Partition translation failed: {translation.error}. "
+                          f"Falling back to filter path.")
+                # Fall through to legacy filter path
+
+        if documents is None:
+            # Legacy filter path (data_filter or scope.filters)
+            filters = dict(self.directive.data_filter or self.directive.scope.filters)
+
+            # Slice translation: if filters contain a "slice" key, translate to catalog fields
+            if "slice" in filters:
+                slice_desc = filters.pop("slice")
+                if isinstance(slice_desc, str) and slice_desc.strip():
+                    translated = await self._translate_slice(slice_desc)
+                    filters.update(translated)
+
+            if hasattr(self.data_source, 'valid_filter_params'):
+                valid_params = self.data_source.valid_filter_params()
+                unknown = [k for k in filters if k not in valid_params]
+                if unknown:
+                    self._log(f"Filter validation: unknown params {unknown}. "
+                              f"Valid: keyword, packages, or catalog fields: "
+                              f"{sorted(self.data_source.CATALOG_FIELDS) if hasattr(self.data_source, 'CATALOG_FIELDS') else sorted(valid_params)}")
+                    filters = {k: v for k, v in filters.items() if k in valid_params}
+
+            documents = await self.data_source.fetch(filters, max_results=100)
+
         if not documents:
             return None
 
-        # Format data
+        # Scope-fit check: do the records match the partition intent?
+        if self.directive.partition and self._translation_interpretation and not self.envelope_exhausted:
+            scope_fit = await self._check_scope_fit(documents)
+            if scope_fit == "MISMATCH":
+                self._log(f"Scope-fit MISMATCH: records don't match partition intent")
+                # Return a result that surfaces the mismatch to the parent
+                return {
+                    "observations": [],
+                    "hire_directives": [],
+                    "formation_assessment": {
+                        "decision": "investigate",
+                        "reasoning": f"SCOPE_FIT_MISMATCH: partition '{self.directive.partition[:80]}' "
+                                     f"translated as '{self._translation_interpretation}' but "
+                                     f"records don't match scope '{self.directive.scope.description[:100]}'"
+                    },
+                    "self_evaluation": {"bar_met": False, "purpose_addressed": False,
+                                        "purpose_gap": "Records did not match partition intent"},
+                }
+
+        # Format data and build prompt
         fetched_data = _format_documents(documents)
+        return await self._reason_with_data(documents, fetched_data)
+
+    async def _reason_with_data(self, documents: list, fetched_data: str) -> dict | None:
+        """Build prompt and make LLM call. Shared by engagement lead and worker paths."""
         parent_ctx = self.directive.parent_context or "You are the first node. No prior context."
         purpose = self.directive.purpose or "Carry out the work your role demands."
         remaining_own = max(0, self.budget - self.spent)
@@ -742,6 +1138,7 @@ class RoleWorkerNode:
 
         # Workspace context
         workspace_context = ""
+        charter_exclusions = ""
         if self._workspace_path:
             from .workspace import OrgWorkspace
             ws = OrgWorkspace(self._workspace_path)
@@ -749,10 +1146,13 @@ class RoleWorkerNode:
             rules = ws.read_rules()
             if charter:
                 workspace_context += f"## ORGANIZATIONAL CHARTER\n\n{charter}\n\n"
+                # Extract EXCLUSIONS section for inline use at decision points
+                charter_exclusions = _extract_charter_section(charter, "EXCLUSIONS")
             if rules:
                 workspace_context += f"## RULES OF ENGAGEMENT\n\n{rules}\n\n"
 
         # Filter schema
+        schema = self.data_source.filter_schema() if hasattr(self.data_source, 'filter_schema') else {}
         if schema:
             schema_lines = []
             for param, info in schema.items():
@@ -763,6 +1163,17 @@ class RoleWorkerNode:
             filter_schema_str = "\n".join(schema_lines)
         else:
             filter_schema_str = "No schema available."
+
+        # Bulletin board — pull at formation
+        board_text = self._pull_board()
+        board_context = ""
+        if board_text:
+            board_context = (
+                f"BULLETIN BOARD ({len(self._bulletin_board.posts)} posts from other nodes):\n"
+                f"Posts are observations, hypotheses, or dead ends shared by other nodes in this engagement.\n"
+                f"You must produce independent observations to meet your bar. Board content is context, not a substitute.\n\n"
+                f"{board_text}"
+            )
 
         # Chain circuit breaker
         force_resolve = ""
@@ -798,6 +1209,7 @@ class RoleWorkerNode:
             budget_stage=budget_stage,
             doc_count=len(documents),
             fetched_data=fetched_data,
+            board_context=board_context,
             force_resolve=force_resolve,
         )
 
@@ -923,6 +1335,31 @@ class RoleWorkerNode:
             "synthesis_role": getattr(self, '_synthesis_role', None),
         }
         return self._last_result
+
+
+def _extract_charter_section(charter: str, section_name: str) -> str:
+    """Extract a named section from the four-section charter format.
+
+    Looks for ## SECTION_NAME and returns content up to the next ## header.
+    Returns empty string if section not found.
+    """
+    marker = f"## {section_name.upper()}"
+    idx = charter.find(marker)
+    if idx < 0:
+        # Try without ##
+        marker = section_name.upper()
+        idx = charter.find(marker)
+        if idx < 0:
+            return ""
+
+    # Find the end — next ## header or end of text
+    content_start = charter.find("\n", idx) + 1
+    next_section = charter.find("\n## ", content_start)
+    if next_section < 0:
+        section_text = charter[content_start:]
+    else:
+        section_text = charter[content_start:next_section]
+    return section_text.strip()
 
 
 # === Utility functions (shared patterns with worker.py) ===

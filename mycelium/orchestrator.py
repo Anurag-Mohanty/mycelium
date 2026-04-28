@@ -35,12 +35,14 @@ from .node import run_node
 LEAF_VIABLE_ENVELOPE = 0.12
 from .worker import WorkerNode
 from .synthesizer import synthesize
-from .validator import validate_finding
+from .validator import validate_finding, check_charter_shape
 from .significance import assess_significance
 from .impact import analyze_impact
 from .prompts import DEEP_DIVE_SELECTION_PROMPT, ANOMALY_ROUTING_PROMPT, ANOMALY_AGGREGATION_PROMPT
 from . import events
 from .knowledge_graph import KnowledgeGraph
+from .bulletin_board import BulletinBoard
+from .equip import run_equip
 
 import anthropic
 
@@ -49,13 +51,18 @@ MAX_CHAIN_DEPTH = 8
 
 class Orchestrator:
     def __init__(self, data_source, budget: float = None, output_dir: str = "output",
-                 hints: list[str] = None, visualize: bool = False):
+                 hints: list[str] = None, visualize: bool = False,
+                 deliverable: str = None, obsidian: bool = True,
+                 partition_gate: str = "off"):
         self.data_source = data_source
         self._initial_budget = budget  # None = interactive (user picks in browser)
         self.budget = BudgetPool(total_budget=budget or 10.0)  # placeholder until user picks
         self.output_dir = output_dir
         self.hints = hints or []
         self.visualize = visualize
+        self._deliverable_connector = deliverable
+        self._obsidian = obsidian
+        self._partition_gate = partition_gate
 
         self.stats = ExplorationStats()
         self.all_node_results: list[NodeResult] = []
@@ -78,8 +85,11 @@ class Orchestrator:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         (self.run_dir / "nodes").mkdir(exist_ok=True)
 
-        # Knowledge graph — persists across runs
-        self.kg = KnowledgeGraph(str(Path(output_dir) / "knowledge.db"))
+        # Knowledge graph — shared across runs, lives at project root
+        self.kg = KnowledgeGraph("knowledge.db")
+
+        # Bulletin board — lateral communication between nodes within this run
+        self.bulletin_board = BulletinBoard()
 
     # --- Logging ---
 
@@ -344,6 +354,24 @@ class Orchestrator:
         print(f"  [WORKSPACE] Org workspace created at {workspace_dir}")
         self._workspace_path = str(workspace_dir)
 
+        # --- EQUIP: workspace prep ---
+        events.emit("phase_change", {"phase": "equip"})
+        equip_result = await run_equip(
+            data_source=self.data_source,
+            charter=charter,
+            catalog_stats=catalog_stats,
+            bulletin_board=self.bulletin_board,
+            budget=0.50,
+        )
+        equip_cost = equip_result.get("cost", 0)
+        if equip_cost > 0:
+            self.budget.record("overhead", equip_cost)
+
+        if equip_result["status"] == "CANNOT_PREP":
+            print(f"\n  [EQUIP] FAILED: {equip_result['reason']}")
+            print(f"  Engagement cannot proceed without workspace preparation.")
+            return self._build_exploration_data()
+
         # Exploration limit — budget is the real constraint
         self.budget.phase_limits["exploration"] = 0.85
         self._planner_envelope = {
@@ -408,6 +436,14 @@ class Orchestrator:
               f"{kg_stats['relationships']} relationships, "
               f"{kg_stats['contradictions']} contradictions")
 
+        # Save bulletin board state
+        bb_stats = self.bulletin_board.stats()
+        self.bulletin_board.save(self.run_dir / "workspace_state.json")
+        if bb_stats["total_posts"] > 0:
+            print(f"  Bulletin board: {bb_stats['total_posts']} posts, "
+                  f"{bb_stats['total_pulls']} pulls, "
+                  f"{bb_stats['influenced_pulls']} influenced")
+
         events.emit("exploration_complete", {
             "total_nodes": self.stats.nodes_spawned,
             "total_observations": self.stats.observations_collected,
@@ -418,6 +454,34 @@ class Orchestrator:
 
         # Compute and save run metrics
         self._write_run_metrics()
+
+        # Generate deliverable database
+        try:
+            from .deliverable import generate_deliverable
+            deliverable_path = generate_deliverable(str(self.run_dir), self.run_id)
+            print(f"  Deliverable: {deliverable_path}")
+            # Run connector if configured
+            if hasattr(self, '_deliverable_connector') and self._deliverable_connector:
+                from .connectors import get_connector
+                connector = get_connector(self._deliverable_connector)
+                result = connector.deliver(deliverable_path, {})
+                if self._deliverable_connector == "mcp":
+                    print(f"  MCP server: {result.get('mcp_server_path', '')}")
+        except Exception as e:
+            print(f"  Deliverable generation skipped: {e}")
+
+        # Generate Obsidian vault
+        if self._obsidian:
+            try:
+                from .obsidian_export import generate_vault, update_persistent_vault
+                vault_path = generate_vault(str(self.run_dir), self.run_id)
+                corpus = self.data_source.__class__.__name__
+                persistent_path = update_persistent_vault(str(self.run_dir), self.run_id, corpus)
+                import glob
+                entity_count = len(glob.glob(f"{vault_path}/*.md")) - 1  # exclude _index.md
+                print(f"  Obsidian vault: {entity_count} entities at {vault_path}")
+            except Exception as e:
+                print(f"  Obsidian vault skipped: {e}")
 
         # Generate transcripts and dashboard
         try:
@@ -684,6 +748,8 @@ class Orchestrator:
                 depth=0,
                 max_depth=self._max_depth,
                 leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
+                bulletin_board=self.bulletin_board,
+                partition_gate=self._partition_gate,
             )
             worker_result = await worker.run()
 
@@ -725,17 +791,50 @@ class Orchestrator:
             print(f"  [VALIDATE {i}/{len(findings)}] {ftype}: {desc}...")
 
             result = await validate_finding(f"{ftype}_{i}", ftype, finding)
-            self.all_validations.append(result)
             self.budget.record("validation", result.cost)
             self._update_tokens(result.token_usage)
+
+            # Charter-shape check: does this finding match an excluded shape?
+            charter_exclusions = ""
+            if hasattr(self, '_workspace') and self._workspace:
+                charter_text = self._workspace.read_charter()
+                if charter_text:
+                    from .worker_v2 import _extract_charter_section
+                    charter_exclusions = _extract_charter_section(charter_text, "EXCLUSIONS")
+
+            finding_claim = desc
+            if result.revised_finding:
+                finding_claim = str(result.revised_finding)[:300]
+
+            shape_check = await check_charter_shape(finding_claim, charter_exclusions)
+            shape_cost = shape_check.get("cost", 0)
+            if shape_cost > 0:
+                self.budget.record("validation", shape_cost)
+
+            # Store shape check result on validation result
+            result.charter_shape_check = shape_check
+            shape_verdict = shape_check.get("verdict", "no_check")
+            shape_action = shape_check.get("recommended_action", "pass")
+
+            self.all_validations.append(result)
             self.stats.findings_validated += 1
             if result.verdict in ("confirmed", "confirmed_with_caveats"):
                 self.stats.findings_confirmed += 1
-            print(f"    → {result.verdict} (confidence: {result.adjusted_confidence:.2f})")
+
+            # Log both verdicts
+            shape_note = ""
+            if shape_verdict == "matches_exclusion":
+                shape_note = f" | CHARTER: {shape_action} ({shape_check.get('matched_exclusion', '?')})"
+            elif shape_verdict == "partial_match":
+                shape_note = f" | CHARTER: partial ({shape_check.get('matched_exclusion', '?')})"
+            print(f"    → {result.verdict} (confidence: {result.adjusted_confidence:.2f}){shape_note}")
+
             events.emit("validation_result", {
                 "finding_summary": desc,
                 "verdict": result.verdict,
                 "confidence": result.adjusted_confidence,
+                "charter_shape_verdict": shape_verdict,
+                "charter_shape_action": shape_action,
             })
 
     # --- Significance gate ---
@@ -1232,6 +1331,7 @@ Respond ONLY with a JSON array."""}],
 
     def _populate_kg(self, node_result: NodeResult):
         """Extract entities and relationships from observations and add to knowledge graph."""
+        corpus = self.data_source.__class__.__name__
         for obs in node_result.observations:
             # Add the primary entity (the source item)
             entity_name = obs.source.title or obs.source.doc_id
@@ -1250,6 +1350,7 @@ Respond ONLY with a JSON array."""}],
                 confidence=max(obs.preliminary_relevance.values()) if obs.preliminary_relevance else 0.5,
                 observation_type=obs.observation_type,
                 entity_type=entity_type,
+                corpus=corpus,
             )
 
             # Add the author/maintainer as a related entity if present
@@ -1262,6 +1363,7 @@ Respond ONLY with a JSON array."""}],
                     evidence=obs.what_i_saw[:200],
                     from_type=entity_type,
                     to_type="person_or_org",
+                    corpus=corpus,
                 )
 
             # Add connections from potential_connections
@@ -1272,7 +1374,72 @@ Respond ONLY with a JSON array."""}],
                     relationship_type="related_to",
                     confidence=0.3,
                     evidence=obs.what_i_saw[:200],
+                    corpus=corpus,
                 )
+
+    def _populate_reasoning_records(self, worker):
+        """Extract reasoning quality records from a RoleWorkerNode into the knowledge graph."""
+        source_name = getattr(self.data_source, 'source_name',
+                              self.data_source.__class__.__name__)
+        role = getattr(worker, '_role', None)
+        role_name = role.name if role else None
+        bar = role.success_bar if role else None
+        heuristic = getattr(role, 'heuristic', None) if role else None
+        mission = getattr(role, 'mission', None) if role else None
+
+        # Role record
+        self.kg.add_role_record(
+            run_id=self.run_id,
+            node_id=worker.node_id,
+            parent_id=worker.directive.parent_id,
+            role_name=role_name,
+            mission=mission,
+            bar=bar,
+            heuristic=heuristic,
+            scope_description=worker.directive.scope.description[:200],
+            budget=worker.budget,
+            corpus=source_name,
+            tree_position=worker.pos,
+            depth=worker.depth,
+        )
+
+        # Decision record: formation (investigate vs hire)
+        formation = "hire" if worker.child_workers else "investigate"
+        self.kg.add_decision_record(
+            run_id=self.run_id,
+            node_id=worker.node_id,
+            decision_type="formation",
+            outcome=formation,
+            reasoning_summary="",
+        )
+
+        # Decision record: turn2 if present
+        turn2 = getattr(worker, '_turn2_result', None)
+        if turn2 and isinstance(turn2, dict):
+            self.kg.add_decision_record(
+                run_id=self.run_id,
+                node_id=worker.node_id,
+                decision_type="turn2",
+                outcome=turn2.get("option_chosen", ""),
+                reasoning_summary=str(turn2.get("option_reasoning", ""))[:500],
+            )
+
+        # Outcome record
+        metrics = worker.metrics if isinstance(worker.metrics, dict) else {}
+        turn2_class = metrics.get("turn2_classification", "")
+        reader_scores = metrics.get("reader_test_scores", {})
+        validation = metrics.get("validation_outcomes", {})
+
+        self.kg.add_outcome_record(
+            run_id=self.run_id,
+            node_id=worker.node_id,
+            observation_count=len(worker.observations),
+            budget_allocated=worker.budget,
+            budget_spent=worker.spent,
+            turn2_classification=turn2_class,
+            reader_test_scores=reader_scores if isinstance(reader_scores, dict) else {},
+            validation_outcomes=validation if isinstance(validation, dict) else {},
+        )
 
     def _update_tokens(self, usage: dict):
         self.stats.total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
@@ -1465,7 +1632,7 @@ Respond ONLY with a JSON array."""}],
             scope=Scope(
                 source=self.data_source.__class__.__name__,
                 filters={},
-                description=charter[:2000],  # Charter IS the scope for the first node
+                description=charter,  # Full charter — engagement lead needs all exclusions
             ),
             lenses=lenses,
             parent_context="You are the first node. The charter above is your engagement directive.",
@@ -1489,6 +1656,8 @@ Respond ONLY with a JSON array."""}],
             depth=0,
             max_depth=self._max_depth,
             leaf_viable_envelope=LEAF_VIABLE_ENVELOPE,
+            bulletin_board=self.bulletin_board,
+            partition_gate=self._partition_gate,
         )
 
         print(f"  [ROLE PATH] First node: {first_role.name} (${exploration_budget:.2f})")
@@ -1606,6 +1775,8 @@ Respond ONLY with a JSON array."""}],
                 cost=worker.spent,
             )
             self.all_node_results.append(nr)
+            self._populate_kg(nr)
+            self._populate_reasoning_records(worker)
             for child in worker.child_workers:
                 walk(child)
         walk(root_worker)

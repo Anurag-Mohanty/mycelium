@@ -71,6 +71,7 @@ class Directive:
     parent_context: Optional[str]
     purpose: str = ""  # WHY this node is being asked — what the parent needs from it
     data_filter: dict = field(default_factory=dict)  # structured filter matching data source schema
+    partition: str = ""  # natural-language description of the data slice (translated by EQUIP)
     node_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     parent_id: Optional[str] = None
     tree_position: str = "ROOT"
@@ -307,12 +308,21 @@ class BudgetPool:
     def exploration_remaining(self) -> float:
         return max(0.0, self.exploration_budget() - self.phase_spent.get("exploration", 0))
 
+    def downstream_floor(self) -> float:
+        """Minimum budget reserved for synthesis + validation + impact.
+        These phases must run regardless of how much exploration/deep-dives spent."""
+        # Based on observed costs from successful runs: synthesis ~$0.08, validation ~$0.12, impact ~$0.05
+        return min(0.30, self.total * 0.06)
+
     def deep_dive_available(self) -> float:
-        """Deep-dive gets its own reserve plus any unspent exploration."""
+        """Deep-dive gets its own reserve plus unspent exploration, minus downstream floors."""
         reserve = self.total * self.phase_limits["deep_dive"]
         exploration_savings = max(0.0,
             self.exploration_budget() - self.phase_spent.get("exploration", 0))
-        return min(reserve + exploration_savings, self.remaining())
+        # Reserve budget for synthesis/validation/impact before giving surplus to deep dives
+        downstream_reserved = self.downstream_floor()
+        available = reserve + exploration_savings - downstream_reserved
+        return min(max(0.0, available), self.remaining())
 
     def segment_status(self, segment_id: str) -> dict:
         """How is this segment doing vs its target?"""

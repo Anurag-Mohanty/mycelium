@@ -3,6 +3,11 @@
 The npm registry is public, no auth required, 2.5M+ packages.
 Rich relational data: dependencies, maintainers, licenses, publish history.
 
+Three fetch paths (inherited from DataSource base):
+  1. Search API (keyword) — discover packages by topic
+  2. Direct lookup (packages) — fetch specific named packages
+  3. Catalog query (catalog_query) — filter 100K enriched records by field/value
+
 APIs:
   Registry:   https://registry.npmjs.org/{package}
   Search:     https://registry.npmjs.org/-/v1/search?text={query}&size={n}
@@ -23,6 +28,7 @@ class NpmRegistrySource(DataSource):
     """Connector for the npm registry."""
 
     def __init__(self):
+        super().__init__()
         self.client = httpx.AsyncClient(timeout=30.0)
         self._last_call = 0.0
         self._enriched_index = None  # lazy-loaded from catalog/npm_enriched.jsonl
@@ -143,15 +149,37 @@ class NpmRegistrySource(DataSource):
 
         return survey_data
 
+    # Catalog field names — used for routing flat filters to catalog query
+    CATALOG_FIELDS = {
+        "name", "monthly_downloads", "description", "version", "license",
+        "keywords", "dependencies", "dependency_count", "dev_dependency_count",
+        "repository", "maintainers", "maintainer_count", "version_count",
+        "created", "last_modified",
+    }
+
     async def fetch(self, filters: dict, max_results: int = 50) -> list[dict]:
         """Fetch package data matching filters.
 
         Returns package records with metadata, dependencies, maintainers.
-        Two modes controlled by filters:
-          - Search mode (keyword): search API + enrich with metadata
+        Three modes controlled by filters:
+          - Catalog query (catalog_query or flat catalog field names): filter enriched catalog
           - Direct mode (packages): fetch specific package metadata
+          - Search mode (keyword): search API + enrich with metadata
         """
         packages = []
+
+        # Path 3a: Nested catalog query — {"catalog_query": {...}}
+        if "catalog_query" in filters and filters["catalog_query"]:
+            query = filters["catalog_query"]
+            if isinstance(query, dict):
+                return self.query_catalog(query, max_results=max_results)
+
+        # Path 3b: Flat catalog fields — route to catalog query handler
+        # Any top-level params matching catalog field names become a catalog query
+        catalog_params = {k: v for k, v in filters.items()
+                         if k in self.CATALOG_FIELDS}
+        if catalog_params:
+            return self.query_catalog(catalog_params, max_results=max_results)
 
         # If specific packages are requested, fetch them directly
         if "packages" in filters and filters["packages"]:
@@ -440,26 +468,71 @@ class NpmRegistrySource(DataSource):
         return results
 
     def filter_schema(self) -> dict:
+        # Build catalog field descriptions from catalog metadata
+        cat_meta = self.catalog_metadata()
+        total = cat_meta.get("total_records", 0)
+        fields = cat_meta.get("fields", [])
+
+        # Build per-field descriptions with type and range
+        field_lines = []
+        for f in fields:
+            fname = f["name"]
+            ftype = f.get("type", "TEXT")
+            if ftype in ("INTEGER", "REAL") and f.get("min") is not None:
+                field_lines.append(f"    - {fname} ({ftype.lower()}, range {f['min']} to {f['max']})")
+            elif ftype == "TEXT":
+                field_lines.append(f"    - {fname} (str)")
+            else:
+                field_lines.append(f"    - {fname} ({ftype.lower()})")
+
+        field_listing = "\n".join(field_lines) if field_lines else "    (no fields available)"
+
+        cat_desc = (
+            f"Use any of these field names as top-level filter params to query "
+            f"the full enriched catalog of {total:,} packages. "
+            f"Returns matching package records. Combine multiple with AND.\n"
+            f"\n"
+            f"  Queryable fields:\n"
+            f"{field_listing}\n"
+            f"\n"
+            f"  Operators (apply to a field as a value):\n"
+            f"    - simple value: equality match, e.g. {{\"license\": \"MIT\"}}\n"
+            f"    - {{\"gt\": N}}, {{\"gte\": N}}, {{\"lt\": N}}, {{\"lte\": N}}: numeric comparisons\n"
+            f"    - {{\"between\": [low, high]}}: numeric range, inclusive\n"
+            f"    - {{\"in\": [values]}}: field value is in the list\n"
+            f"    - {{\"contains\": \"text\"}}: substring match for strings"
+        )
+
         return {
             "keyword": {
                 "type": "string",
-                "description": "Search term passed to npm search API. Matches package name, description, and keywords.",
+                "description": "Search term passed to npm search API. Returns top ~100 packages by relevance.",
                 "example": "react hooks",
                 "required": False,
             },
             "packages": {
                 "type": "list[string]",
-                "description": "Exact package names to fetch directly by registry lookup.",
+                "description": "Exact package names to fetch directly by registry lookup. Returns full metadata for each named package.",
                 "example": ["lodash", "express", "@vue/reactivity"],
                 "required": False,
             },
-            "scope": {
+            "catalog_fields": {
+                "type": "field_name: value (top-level params)",
+                "description": cat_desc,
+                "example": {"monthly_downloads": {"gt": 1000000}, "maintainer_count": 1},
+                "required": False,
+            },
+            "slice": {
                 "type": "string",
-                "description": "npm scope prefix to filter by organization.",
-                "example": "@babel",
+                "description": "Natural-language description of the data slice you need. The system translates this to a catalog query. Reference fields and value ranges from the EQUIP briefing.",
+                "example": "high-download single-maintainer packages",
                 "required": False,
             },
         }
+
+    def valid_filter_params(self) -> set[str]:
+        """All valid top-level filter params: schema keys + flat catalog field names + slice."""
+        return set(self.filter_schema().keys()) | self.CATALOG_FIELDS
 
     async def close(self):
         await self.client.aclose()
