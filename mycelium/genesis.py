@@ -33,10 +33,12 @@ async def run_genesis(data_source, hints: list[str] = None,
         sample = random.sample(catalog_records, sample_size)
         lightweight_sample = []
         for rec in sample:
-            light = {k: v for k, v in rec.items()
-                     if k not in ("risk_factors_text", "abstract", "dependencies",
-                                  "dev_dependencies", "description")
-                     or (isinstance(v, str) and len(v) < 200)}
+            light = {}
+            for k, v in rec.items():
+                if isinstance(v, str) and len(v) > 500:
+                    light[k] = v[:200] + f"... [{len(v):,} chars total]"
+                else:
+                    light[k] = v
             lightweight_sample.append(light)
         corpus_metadata = json.dumps({
             "source": data_source.__class__.__name__,

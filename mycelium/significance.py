@@ -12,7 +12,8 @@ from .prompts import SIGNIFICANCE_PROMPT
 
 async def assess_significance(finding_id: str, finding: dict,
                                validation: dict,
-                               briefing_text: str = "") -> dict:
+                               briefing_text: str = "",
+                               role: dict = None) -> dict:
     """Score a validated finding on novelty and actionability.
 
     Args:
@@ -29,7 +30,19 @@ async def assess_significance(finding_id: str, finding: dict,
                     or finding.get("pattern", ""))
     evidence = json.dumps(finding, indent=2, default=str)
 
-    prompt = SIGNIFICANCE_PROMPT.format(
+    # Build role context from authored role (if available)
+    role = role or {}
+    role_context = ""
+    if role:
+        role_context = (
+            f"\nYOUR ROLE:\n"
+            f"Name: {role.get('name', 'significance assessor')}\n"
+            f"Mission: {role.get('mission', '')}\n"
+            f"Bar: {role.get('bar', '')}\n"
+            f"Heuristic: {role.get('heuristic', '')}\n\n"
+        )
+
+    prompt = role_context + SIGNIFICANCE_PROMPT.format(
         finding=finding_desc,
         evidence=evidence,
         validation_status=validation.get("verdict", "unknown"),

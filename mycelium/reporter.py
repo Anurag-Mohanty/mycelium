@@ -9,11 +9,12 @@ import anthropic
 from .prompts import REPORT_PROMPT
 
 
-async def generate_report(exploration_data: dict) -> str:
+async def generate_report(exploration_data: dict, reporter_role: dict = None) -> str:
     """Generate the final report with validation and impact sections.
 
     Args:
         exploration_data: Complete exploration data from the orchestrator
+        reporter_role: Authored role dict from pipeline role authoring
 
     Returns:
         Markdown string of the full report
@@ -70,6 +71,17 @@ async def generate_report(exploration_data: dict) -> str:
     corpus_validations = [v for v in validations if not v.get("is_pipeline_issue")]
     pipeline_validations = [v for v in validations if v.get("is_pipeline_issue")]
 
+    # Apply reader test gate: exclude "no" and charter-shape "reject" findings
+    excluded_findings = []
+    gated_validations = []
+    for v in corpus_validations:
+        gate = v.get("reader_test_gate", "passed")
+        if gate in ("excluded_no_novelty", "excluded_charter_shape"):
+            excluded_findings.append(v)
+        else:
+            gated_validations.append(v)
+    corpus_validations = gated_validations
+
     # Format sections (corpus findings only for the main report)
     synthesis_text = _format_syntheses(syntheses)
     observations_text = _format_observations(all_observations)
@@ -78,7 +90,22 @@ async def generate_report(exploration_data: dict) -> str:
     unresolved_text = "\n".join(f"- {u}" for u in all_unresolved) if all_unresolved else "(none)"
     hints_text = "\n".join(f"- {h}" for h in hints) if hints else "none — fully autonomous"
 
-    prompt = REPORT_PROMPT.format(
+    # Build role context from authored role
+    role_context = ""
+    if reporter_role:
+        role_context = (
+            f"YOUR ROLE:\n"
+            f"Name: {reporter_role.get('name', 'report author')}\n"
+            f"Mission: {reporter_role.get('mission', '')}\n"
+            f"Bar: {reporter_role.get('bar', '')}\n"
+            f"Heuristic: {reporter_role.get('heuristic', '')}\n\n"
+            f"Apply your role's mission and heuristic when deciding what to lead with, "
+            f"what to emphasize, and how to organize findings. The five-tier structure "
+            f"below is a template — adapt it to serve your role's mission if a different "
+            f"organization would be more effective for this corpus.\n\n"
+        )
+
+    prompt = role_context + REPORT_PROMPT.format(
         exploration_metadata=exploration_metadata,
         corpus_summary=genesis.get("corpus_summary", ""),
         lenses=", ".join(genesis.get("lenses", [])),
@@ -133,6 +160,36 @@ async def generate_report(exploration_data: dict) -> str:
             pipeline_section += f"**Likely cause:** {pv.get('pipeline_issue_reasoning', '')[:200]}\n"
             pipeline_section += f"**Validation:** {pv.get('verdict', '?').upper()}\n\n"
         report += pipeline_section
+
+    # Append excluded findings appendix
+    if excluded_findings:
+        appendix = "\n\n## Appendix: Findings Excluded by Quality Gate\n\n"
+        appendix += (
+            "The following findings were produced by the exploration and validated, "
+            "but excluded from the main report by the reader test or charter-shape check.\n\n"
+        )
+        for ef in excluded_findings:
+            finding = ef.get("original_finding", {})
+            desc = (finding.get("what_conflicts", "") or finding.get("pattern", ""))[:200]
+            gate = ef.get("reader_test_gate", "unknown")
+            reasoning = ef.get("reader_test_reasoning", "")[:200]
+            verdict = ef.get("verdict", "?")
+
+            if gate == "excluded_no_novelty":
+                reason = f"Reader test: finding does not add factual novelty beyond what a practitioner already knows"
+            elif gate == "excluded_charter_shape":
+                shape = ef.get("charter_shape_check", {})
+                reason = f"Charter-shape: matches excluded pattern '{shape.get('matched_exclusion', '?')}'"
+            else:
+                reason = gate
+
+            appendix += f"### Excluded: {desc[:80]}\n"
+            appendix += f"**Reason:** {reason}\n"
+            appendix += f"**Validation verdict:** {verdict}\n"
+            if reasoning:
+                appendix += f"**Reader test reasoning:** {reasoning}\n"
+            appendix += "\n"
+        report += appendix
 
     print(f"  Report generated. Cost: ${cost:.4f}")
     return report

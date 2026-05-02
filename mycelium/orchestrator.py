@@ -65,6 +65,7 @@ class Orchestrator:
         self._partition_gate = partition_gate
 
         self.stats = ExplorationStats()
+        self._token_log: list[dict] = []  # per-call token usage records
         self.all_node_results: list[NodeResult] = []
         self.all_syntheses: list[SynthesisResult] = []
         self.all_validations: list[ValidationResult] = []
@@ -206,6 +207,8 @@ class Orchestrator:
                             return int(obj)
                         if isinstance(obj, (_np.floating,)):
                             return float(obj) if not _np.isnan(obj) else None
+                        if isinstance(obj, (_np.bool_,)):
+                            return bool(obj)
                         if isinstance(obj, _np.ndarray):
                             return obj.tolist()
                         if isinstance(obj, float) and (obj != obj):  # NaN check
@@ -373,11 +376,14 @@ class Orchestrator:
             return self._build_exploration_data()
 
         # Exploration limit — budget is the real constraint
-        self.budget.phase_limits["exploration"] = 0.85
+        self.budget.phase_limits["exploration"] = 0.80
+        self.budget.phase_limits["validation"] = 0.10
+        self.budget.phase_limits["synthesis"] = 0.05
+        self.budget.phase_limits["impact"] = 0.05
         self._planner_envelope = {
-            "exploration_envelope_pct": 0.85,
-            "exploration_envelope_dollars": round(self.budget.total * 0.85, 2),
-            "reasoning": "Role-authoring path: 85% exploration, downstream phases are ceilings",
+            "exploration_envelope_pct": 0.80,
+            "exploration_envelope_dollars": round(self.budget.total * 0.80, 2),
+            "reasoning": "Role-authoring path: 80% exploration, 10% validation, 5% synthesis, 5% impact",
         }
         self._max_depth = 6  # permissive upper bound (safety circuit)
         self._planner_envelope["max_decomposition_depth"] = self._max_depth
@@ -394,6 +400,10 @@ class Orchestrator:
         # --- Phase 2: Deep-dives ---
         await self._run_deep_dives(lenses)
 
+        # --- Author pipeline roles from charter ---
+        print(f"\n  [PIPELINE] Authoring post-exploration roles from charter...")
+        await self._author_pipeline_roles(charter)
+
         # --- Phase 3: Validation ---
         await self._run_validation()
 
@@ -402,6 +412,9 @@ class Orchestrator:
 
         # --- Phase 5: Impact ---
         await self._run_impact_analysis()
+
+        # --- Phase 6: Reader test quality gate ---
+        await self._run_reader_test_gate()
 
         # --- Done ---
         elapsed = time.time() - self.start_time
@@ -454,21 +467,10 @@ class Orchestrator:
 
         # Compute and save run metrics
         self._write_run_metrics()
+        self._write_token_usage()
 
-        # Generate deliverable database
-        try:
-            from .deliverable import generate_deliverable
-            deliverable_path = generate_deliverable(str(self.run_dir), self.run_id)
-            print(f"  Deliverable: {deliverable_path}")
-            # Run connector if configured
-            if hasattr(self, '_deliverable_connector') and self._deliverable_connector:
-                from .connectors import get_connector
-                connector = get_connector(self._deliverable_connector)
-                result = connector.deliver(deliverable_path, {})
-                if self._deliverable_connector == "mcp":
-                    print(f"  MCP server: {result.get('mcp_server_path', '')}")
-        except Exception as e:
-            print(f"  Deliverable generation skipped: {e}")
+        # NOTE: Deliverable generation moved to run.py (after report.md exists)
+        # so the findings table can be populated from the report.
 
         # Generate Obsidian vault
         if self._obsidian:
@@ -480,6 +482,7 @@ class Orchestrator:
                 import glob
                 entity_count = len(glob.glob(f"{vault_path}/*.md")) - 1  # exclude _index.md
                 print(f"  Obsidian vault: {entity_count} entities at {vault_path}")
+                events.emit("obsidian_vault_created", {"file_count": entity_count, "path": str(vault_path)})
             except Exception as e:
                 print(f"  Obsidian vault skipped: {e}")
 
@@ -790,7 +793,14 @@ class Orchestrator:
             desc = str(finding.get("what_conflicts", finding.get("pattern", "")))[:60]
             print(f"  [VALIDATE {i}/{len(findings)}] {ftype}: {desc}...")
 
-            result = await validate_finding(f"{ftype}_{i}", ftype, finding)
+            # Node-based validator with corpus access and four parallel operations
+            briefing_text = self._briefing.common_knowledge if self._briefing else ""
+            result = await validate_finding(
+                f"{ftype}_{i}", ftype, finding,
+                data_source=self.data_source,
+                run_dir=str(self.run_dir),
+                briefing_text=briefing_text,
+            )
             self.budget.record("validation", result.cost)
             self._update_tokens(result.token_usage)
 
@@ -806,7 +816,8 @@ class Orchestrator:
             if result.revised_finding:
                 finding_claim = str(result.revised_finding)[:300]
 
-            shape_check = await check_charter_shape(finding_claim, charter_exclusions)
+            shape_check = await check_charter_shape(
+                finding_claim, charter_exclusions, charter_text=charter_text or "")
             shape_cost = shape_check.get("cost", 0)
             if shape_cost > 0:
                 self.budget.record("validation", shape_cost)
@@ -861,11 +872,13 @@ class Orchestrator:
             print(f"  [SIGNIFICANCE {i}/{len(confirmed)}] {desc}...")
 
             briefing_for_sig = self._briefing.common_knowledge if self._briefing else ""
+            sig_role = getattr(self, '_pipeline_roles', {}).get("significance")
             result = await assess_significance(
                 v.finding_id, v.original_finding,
                 {"verdict": v.verdict, "revised_finding": v.revised_finding,
                  "adjusted_confidence": v.adjusted_confidence},
-                briefing_text=briefing_for_sig)
+                briefing_text=briefing_for_sig,
+                role=sig_role)
             self.all_significance_scores.append(result)
             self.budget.record("validation", result.get("cost", 0))
             self._update_tokens(result.get("token_usage", {}))
@@ -936,6 +949,221 @@ class Orchestrator:
                 "who_affected": ", ".join(result.affected_parties[:3]),
                 "action": result.actionability[:100] if result.actionability else "",
             })
+
+    # --- Reader test quality gate ---
+
+    async def _run_reader_test_gate(self):
+        """Score findings with reader test and gate inclusion in report.
+
+        Runs after validation + significance + impact, before report generation.
+        Reader test scores affect tier assignment and report inclusion:
+        - "yes" → stays at current tier
+        - "yes_factual" → stays but annotated (interpretation uncertain)
+        - "marginal" → demoted one tier
+        - "no" → excluded from main report, listed in appendix
+        Charter-shape "reject" findings also excluded.
+        """
+        if not self.all_validations:
+            return
+
+        # Load charter and briefing
+        charter_text = ""
+        briefing_text = self._briefing.common_knowledge if self._briefing else ""
+        if hasattr(self, '_workspace') and self._workspace:
+            charter_text = self._workspace.read_charter() or ""
+
+        if not charter_text:
+            return
+
+        print(f"\n  {'─'*54}")
+        print(f"  PHASE 6: READER TEST GATE ({len(self.all_validations)} findings)")
+        events.emit("phase_change", {"phase": "reader_test"})
+        print(f"  {'─'*54}\n")
+
+        from .reader_test import score_findings
+
+        # Build finding list for scoring
+        findings_for_scoring = []
+        for v in self.all_validations:
+            if v.verdict == "refuted":
+                continue  # already filtered by significance gate
+            summary = v.original_finding.get("what_conflicts",
+                      v.original_finding.get("pattern", ""))
+            evidence = v.original_finding.get("evidence_chain",
+                       v.original_finding.get("side_a", ""))
+            findings_for_scoring.append({
+                "summary": summary,
+                "evidence": str(evidence)[:2000],
+                "validation_status": v.verdict,
+                "finding_id": v.finding_id,
+            })
+
+        if not findings_for_scoring:
+            print("  ⚠ No findings to score")
+            return
+
+        # Score findings — pass briefing-augmented charter
+        augmented_charter = charter_text
+        if briefing_text:
+            augmented_charter += (
+                f"\n\n## COMMON KNOWLEDGE BRIEFING\n"
+                f"(What a domain practitioner already knows — findings that restate "
+                f"this content should score NO on factual novelty)\n\n{briefing_text}"
+            )
+
+        reader_role = getattr(self, '_pipeline_roles', {}).get("reader_test")
+        scores = await score_findings(augmented_charter, findings_for_scoring[:10],
+                                       role=reader_role)
+        total_cost = sum(s.get("cost", 0) for s in scores)
+        self.budget.record("overhead", total_cost)
+
+        # Apply scores to validations
+        self._reader_test_scores = scores
+        excluded_reader = []
+        demoted = []
+
+        for score in scores:
+            idx = score.get("finding_index", -1)
+            if idx < 0 or idx >= len(findings_for_scoring):
+                continue
+            fid = findings_for_scoring[idx].get("finding_id", "")
+            combined = score.get("score", "no")
+
+            # Find the matching validation result
+            for v in self.all_validations:
+                if v.finding_id == fid:
+                    v.reader_test_score = combined
+                    v.reader_test_reasoning = score.get("reasoning", "")
+
+                    # Charter-shape rejection
+                    shape = getattr(v, 'charter_shape_check', None) or {}
+                    if shape.get("recommended_action") == "reject":
+                        v.reader_test_gate = "excluded_charter_shape"
+                        excluded_reader.append((v, "charter-shape reject"))
+                    elif combined == "no":
+                        v.reader_test_gate = "excluded_no_novelty"
+                        excluded_reader.append((v, f"reader test: no"))
+                    elif combined == "marginal":
+                        v.reader_test_gate = "demoted"
+                        demoted.append(v)
+                    else:
+                        v.reader_test_gate = "passed"
+                    break
+
+        # Summary
+        passed = sum(1 for v in self.all_validations
+                     if getattr(v, 'reader_test_gate', '') == 'passed')
+        print(f"  Reader test: {passed} passed, {len(demoted)} demoted, "
+              f"{len(excluded_reader)} excluded (${total_cost:.3f})")
+        for v, reason in excluded_reader:
+            desc = v.original_finding.get("what_conflicts",
+                   v.original_finding.get("pattern", ""))
+            print(f"    EXCLUDED: {str(desc)[:60]} — {reason}")
+
+    # --- Pipeline role authoring ---
+
+    async def _author_pipeline_roles(self, charter: str):
+        """Author roles for post-exploration pipeline components from the charter.
+
+        Each role is authored by the LLM based on the charter's domain and
+        standards, replacing hardcoded rubrics in the synthesizer, reader test,
+        significance scorer, and reporter.
+        """
+        prompt = (
+            f"You are designing the post-exploration analysis team for an investigation.\n\n"
+            f"CHARTER:\n{charter}\n\n"
+            f"Author roles for four pipeline components. Each role should be specific "
+            f"to THIS charter's domain and standards — not generic.\n\n"
+            f"Return JSON:\n"
+            f'{{\n'
+            f'  "synthesizer": {{\n'
+            f'    "name": "role name",\n'
+            f'    "mission": "what this synthesizer should produce — what counts as a finding worth promoting given this charter",\n'
+            f'    "bar": "minimum acceptable — what would make a candidate finding fail",\n'
+            f'    "heuristic": "when uncertain about whether to include a finding, lean toward..."\n'
+            f'  }},\n'
+            f'  "reader_test": {{\n'
+            f'    "name": "role name — the knowledgeable reader persona",\n'
+            f'    "mission": "what this reader evaluates — what makes a finding notable for this domain",\n'
+            f'    "bar": "minimum — what a finding must have for this reader to say I did not know that",\n'
+            f'    "heuristic": "when uncertain about novelty, lean toward..."\n'
+            f'  }},\n'
+            f'  "significance": {{\n'
+            f'    "name": "role name",\n'
+            f'    "mission": "how to assess significance — what matters in this domain",\n'
+            f'    "bar": "minimum for a finding to be significant rather than merely noted",\n'
+            f'    "heuristic": "when balancing novelty vs actionability, lean toward..."\n'
+            f'  }},\n'
+            f'  "reporter": {{\n'
+            f'    "name": "role name",\n'
+            f'    "mission": "how to present findings — what should lead, what is supporting context",\n'
+            f'    "bar": "minimum quality for the report — what would make it fail",\n'
+            f'    "heuristic": "when organizing findings, lead with..."\n'
+            f'  }}\n'
+            f'}}\n\n'
+            f"Respond ONLY with valid JSON."
+        )
+
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        cost = (response.usage.input_tokens * 3 + response.usage.output_tokens * 15) / 1_000_000
+        self.budget.record("overhead", cost)
+
+        raw = response.content[0].text
+        try:
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            roles = json.loads(raw[start:end])
+        except (json.JSONDecodeError, ValueError):
+            roles = {}
+
+        self._pipeline_roles = roles
+        for component, role in roles.items():
+            print(f"  [PIPELINE ROLE] {component}: {role.get('name', '?')}")
+
+        # Save to workspace for inspection
+        roles_path = self.run_dir / "workspace" / "pipeline_roles.json"
+        roles_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(roles_path, "w") as f:
+            json.dump(roles, f, indent=2)
+        return roles
+
+    def _write_token_usage(self):
+        """Write per-node token usage with cache stats to workspace."""
+        usage_data = {"by_node": [], "totals": {
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+        }}
+        for nr in self.all_node_results:
+            tu = nr.token_usage
+            entry = {
+                "node_id": nr.node_id[:8],
+                "tree_position": nr.tree_position,
+                "scope": nr.scope_description[:60],
+                "input_tokens": tu.get("input_tokens", 0),
+                "output_tokens": tu.get("output_tokens", 0),
+                "cache_read": tu.get("cache_read_input_tokens", 0),
+                "cache_write": tu.get("cache_creation_input_tokens", 0),
+                "cost": nr.cost,
+            }
+            usage_data["by_node"].append(entry)
+            for k in ("input_tokens", "output_tokens",
+                       "cache_read_input_tokens", "cache_creation_input_tokens"):
+                usage_data["totals"][k] = usage_data["totals"].get(k, 0) + tu.get(k, 0)
+
+        # Cache hit rate
+        total_input = usage_data["totals"]["input_tokens"]
+        cache_read = usage_data["totals"]["cache_read_input_tokens"]
+        usage_data["cache_hit_rate"] = (cache_read / total_input * 100) if total_input > 0 else 0
+
+        path = self.run_dir / "workspace" / "token_usage.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(usage_data, f, indent=2)
 
     # --- Budget & context helpers ---
 
@@ -1274,6 +1502,9 @@ Respond ONLY with a JSON array."""}],
             unresolved=[],
             raw_reasoning="",
             thinking="\n".join(t.get("thinking", "") for t in result.get("thinking_log", [])),
+            tree_position=result.get("tree_position", ""),
+            token_usage=result.get("token_usage", {}),
+            cost=result.get("cost", 0),
         )
 
     def _capacity_context(self) -> str:
@@ -1695,8 +1926,11 @@ Respond ONLY with a JSON array."""}],
                 if ws_charter:
                     ws_context = f"## ORGANIZATIONAL CHARTER\n\n{ws_charter}\n\n"
 
-            if synthesis_role:
-                print(f"\n  [ROOT] SYNTHESIZING with authored role: {synthesis_role.get('name', '?')}")
+            # Use pipeline-authored role if available, else exploration-authored
+            pipeline_synth = getattr(self, '_pipeline_roles', {}).get("synthesizer")
+            active_role = pipeline_synth or synthesis_role
+            if active_role:
+                print(f"\n  [ROOT] SYNTHESIZING with role: {active_role.get('name', '?')}")
             else:
                 print(f"\n  [ROOT] SYNTHESIZING all observations...")
             virtual_root = NodeResult(
@@ -1708,8 +1942,9 @@ Respond ONLY with a JSON array."""}],
             synth_inputs = list(self.all_node_results)
             root_synthesis = await synthesize(
                 virtual_root, synth_inputs, lenses,
-                synthesis_role=synthesis_role,
+                synthesis_role=active_role,
                 workspace_context=ws_context,
+                data_source=self.data_source,
             )
             self.all_syntheses.append(root_synthesis)
             self.budget.record("synthesis", root_synthesis.cost)
@@ -1772,6 +2007,8 @@ Respond ONLY with a JSON array."""}],
                 unresolved=[],
                 raw_reasoning="",
                 thinking=worker.thinking_log[0]["thinking"] if worker.thinking_log else "",
+                tree_position=worker.pos,
+                token_usage=worker.token_usage,
                 cost=worker.spent,
             )
             self.all_node_results.append(nr)
@@ -2194,7 +2431,7 @@ def _synthesis_to_dict(s: SynthesisResult) -> dict:
     }
 
 def _validation_to_dict(v: ValidationResult) -> dict:
-    return {
+    d = {
         "finding_id": v.finding_id, "original_finding": v.original_finding,
         "verdict": v.verdict, "reasoning": v.reasoning,
         "factual_assessment": v.factual_assessment,
@@ -2203,8 +2440,13 @@ def _validation_to_dict(v: ValidationResult) -> dict:
         "pipeline_issue_reasoning": v.pipeline_issue_reasoning,
         "adjusted_confidence": v.adjusted_confidence, "adjusted_tier": v.adjusted_tier,
         "verification_action": v.verification_action, "revised_finding": v.revised_finding,
+        "reader_test_gate": getattr(v, 'reader_test_gate', ''),
+        "reader_test_score": getattr(v, 'reader_test_score', ''),
+        "reader_test_reasoning": getattr(v, 'reader_test_reasoning', ''),
+        "charter_shape_check": getattr(v, 'charter_shape_check', {}),
         "cost": v.cost,
     }
+    return d
 
 def _impact_to_dict(im: ImpactResult) -> dict:
     return {

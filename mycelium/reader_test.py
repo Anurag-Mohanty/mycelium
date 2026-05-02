@@ -12,9 +12,13 @@ import anthropic
 
 
 READER_TEST_PROMPT = """\
-You are a knowledgeable practitioner in the domain this investigation covers. \
-You have read the organizational charter below. You are now reviewing a finding \
-produced by the investigation team.
+You are evaluating a finding from an investigation team.
+
+YOUR ROLE:
+Name: {role_name}
+Mission: {role_mission}
+Bar (minimum to pass): {role_bar}
+Heuristic: {role_heuristic}
 
 ORGANIZATIONAL CHARTER:
 {charter}
@@ -29,66 +33,55 @@ VALIDATION STATUS: {validation_status}
 
 ---
 
-Score this finding on TWO dimensions:
+Evaluate this finding against your role's bar. The question is: does this \
+finding clear your bar? Would the reader described in your role say "I \
+didn't know that" or "this is worth knowing"?
 
-1. FACTUAL NOVELTY — would a practitioner say "I didn't know that fact"?
+NOVELTY CALIBRATION: Distinguish between CATEGORY AWARENESS and SPECIFIC \
+ACTIONABLE INSTANCE. A practitioner who knows "single-maintainer packages \
+exist" does NOT already know "lodash specifically has 580M downloads under \
+one maintainer named jdalton." Category awareness is common knowledge. A \
+specific, quantified, named instance with an actionable recommendation is \
+novel even if the category is known. Score novel when the finding names \
+specific entities, provides specific measurements, and enables a specific \
+action the practitioner could not take from category knowledge alone.
 
-YES — The underlying factual observation is something a practitioner would \
-not already know. Specific data that has not been publicly documented.
-
-MARGINAL — The factual observation is partially known or suspected but now \
-quantified with specific evidence the practitioner hadn't seen.
-
-NO — The factual observation restates something practitioners already know. \
-The charter's "what is already known" section covers this category.
-
-2. INTERPRETIVE CERTAINTY — how strongly does the interpretation follow \
-from the facts?
-
-HIGH — The interpretation is well-supported by the cited evidence. Few \
-alternative explanations fit the facts.
-
-MEDIUM — The interpretation is plausible given the evidence but other \
-explanations could also fit.
-
-LOW — The interpretation makes a large leap from the cited evidence. \
-Speculative.
-
-COMBINED SCORE: derived from both dimensions.
-- YES: factual_novelty=YES and interpretive_certainty=HIGH or MEDIUM
-- YES_FACTUAL: factual_novelty=YES but interpretive_certainty=LOW \
-  (the fact is novel even if the interpretation is uncertain)
-- MARGINAL: factual_novelty=MARGINAL, or YES with LOW certainty
-- NO: factual_novelty=NO regardless of interpretation
+Apply your role's heuristic when uncertain.
 
 Return JSON:
 {{
-    "factual_novelty": "yes | marginal | no",
-    "factual_novelty_reasoning": "what fact is claimed, is it known or novel",
-    "interpretive_certainty": "high | medium | low",
-    "interpretive_certainty_reasoning": "how well the interpretation follows from the facts",
+    "passes_bar": true,
     "combined_score": "yes | yes_factual | marginal | no",
-    "reasoning": "overall assessment",
+    "reasoning": "why this finding passes or fails your bar",
     "what_practitioner_knows": "closest known fact to this finding",
-    "what_is_new": "what this finding adds beyond existing knowledge"
+    "what_is_new": "what this finding adds beyond existing knowledge",
+    "elevation_recommendation": "headline | include | background | exclude"
 }}
 
 Respond ONLY with valid JSON, no other text.
 """
 
 
-async def score_findings(charter: str, findings: list[dict]) -> list[dict]:
+async def score_findings(charter: str, findings: list[dict],
+                         role: dict = None) -> list[dict]:
     """Score each finding against the charter's standards.
 
     Args:
         charter: The organizational charter text
         findings: List of finding dicts with at minimum 'summary' and 'evidence'
+        role: Authored role dict with name, mission, bar, heuristic
 
     Returns:
         List of score dicts with 'finding_id', 'score', 'reasoning'
     """
     client = anthropic.Anthropic()
     scores = []
+
+    role = role or {}
+    role_name = role.get("name", "knowledgeable reader")
+    role_mission = role.get("mission", "evaluate whether findings add factual novelty")
+    role_bar = role.get("bar", "finding must contain specific data a practitioner would not already know")
+    role_heuristic = role.get("heuristic", "when uncertain, lean toward inclusion if evidence is specific")
 
     for i, finding in enumerate(findings):
         summary = finding.get("summary", finding.get("what_conflicts",
@@ -104,6 +97,10 @@ async def score_findings(charter: str, findings: list[dict]) -> list[dict]:
             finding=summary,
             evidence=str(evidence)[:2000],
             validation_status=validation,
+            role_name=role_name,
+            role_mission=role_mission,
+            role_bar=role_bar,
+            role_heuristic=role_heuristic,
         )
 
         response = client.messages.create(
@@ -134,6 +131,7 @@ async def score_findings(charter: str, findings: list[dict]) -> list[dict]:
             "reasoning": result.get("reasoning", ""),
             "what_practitioner_knows": result.get("what_practitioner_knows", ""),
             "what_is_new": result.get("what_is_new", ""),
+            "elevation_recommendation": result.get("elevation_recommendation", ""),
             "cost": cost,
         })
 

@@ -518,18 +518,34 @@ def update_persistent_vault(run_dir: str, run_id: str, corpus: str) -> str:
                     new_fm += f"{k}: {v}\n"
                 new_fm += "---\n"
 
-                # Append new observations to the body
+                # Deduplicate: only append observations not already in the body
+                existing_claims = body.lower()
                 new_obs_lines = []
+                dedup_count = 0
                 for o in entity_obs[:10]:
                     claim = o.get("claim", "")
                     if len(claim) > 300:
                         claim = claim[:300] + "..."
+                    # Simple dedup: skip if first 80 chars already present in body
+                    if claim[:80].lower() in existing_claims:
+                        dedup_count += 1
+                        continue
                     conf = o.get("confidence", 0)
                     new_obs_lines.append(
                         f"- \"{claim}\" (run {run_id}"
                         + (f", confidence: {conf:.2f}" if conf else "")
                         + ")"
                     )
+
+                # Update runs_observed count
+                runs_list = fm_dict.get("seen_in_runs", "")
+                if run_id not in runs_list:
+                    runs_list = f"{runs_list}, {run_id}" if runs_list else run_id
+                fm_dict["seen_in_runs"] = runs_list
+                fm_dict["total_runs_observed"] = str(len(runs_list.split(", ")))
+                fm_dict["unique_observations"] = str(
+                    int(fm_dict.get("unique_observations", fm_dict.get("observation_count", "0")))
+                    + len(new_obs_lines))
 
                 if new_obs_lines:
                     body = body.rstrip("\n")

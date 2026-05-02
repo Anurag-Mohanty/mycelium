@@ -31,6 +31,8 @@ if "--prompts" in sys.argv:
 from mycelium.data_sources.federal_register import FederalRegisterSource
 from mycelium.data_sources.npm_registry import NpmRegistrySource
 from mycelium.data_sources.sec_edgar import SecEdgarSource
+from mycelium.data_sources.usaspending import USAspendingSource
+from mycelium.data_sources.lenny_podcast import LennyPodcastSource
 from mycelium.genesis import run_genesis
 from mycelium.orchestrator import Orchestrator
 from mycelium.reporter import generate_report
@@ -105,6 +107,7 @@ STEP 2: Does it match a built-in connector?
 - "npm": npm package registry. Match ONLY for: npm, node packages, JavaScript/TypeScript packages
 - "sec" or "sec_edgar": SEC EDGAR financial filings. Match for: SEC, EDGAR, 10-K filings, annual reports, SEC filings, financial disclosures
 - "federal_register": US Federal Register. Match ONLY for: federal register, federal regulations, CFR
+- "usaspending": USAspending federal contracts. Match for: USAspending, federal contracts, government spending, federal procurement
 If yes, return {{"is_exploration": true, "connector": "the_connector_name", "name": "...", "description": "..."}}.
 
 STRICT: "FDA" is NOT the Federal Register. "GitHub" is NOT npm. "SEC" is NOT the Federal Register.
@@ -178,9 +181,13 @@ def create_data_source(name):
         return NpmRegistrySource()
     elif name == "sec_edgar" or name == "sec":
         return SecEdgarSource()
+    elif name == "usaspending" or name == "usa":
+        return USAspendingSource()
+    elif name == "lenny" or name == "lenny_podcast":
+        return LennyPodcastSource()
     else:
         print(f"ERROR: Unknown data source '{name}'")
-        print("Available: federal_register, npm, sec_edgar")
+        print("Available: federal_register, lenny, npm, sec_edgar, usaspending")
         sys.exit(1)
 
 
@@ -476,12 +483,86 @@ async def main():
 
         exploration_data = await orchestrator.explore()
 
-        report = await generate_report(exploration_data)
+        reporter_role = getattr(orchestrator, '_pipeline_roles', {}).get("reporter")
+        report = await generate_report(exploration_data, reporter_role=reporter_role)
 
         report_path = Path(orchestrator.run_dir) / "report.md"
         with open(report_path, "w") as f:
             f.write(report)
         print(f"\n  Report saved to {report_path}")
+
+        # Generate deliverable database (after report exists so findings parse)
+        try:
+            from mycelium.deliverable import generate_deliverable
+            deliverable_path = generate_deliverable(
+                str(orchestrator.run_dir), orchestrator.run_id)
+            print(f"  Deliverable: {deliverable_path}")
+
+            # Emit deliverable event
+            import sqlite3 as _sql
+            _dconn = _sql.connect(deliverable_path)
+            _dcounts = {}
+            for _tbl in ("entities", "observations", "relationships", "findings", "vectors"):
+                try:
+                    _dcounts[_tbl] = _dconn.execute(f"SELECT COUNT(*) FROM {_tbl}").fetchone()[0]
+                except Exception:
+                    _dcounts[_tbl] = 0
+            _dconn.close()
+            from mycelium import events
+            events.emit("deliverable_db_created", _dcounts)
+            print(f"    Entities: {_dcounts['entities']}, Observations: {_dcounts['observations']}, "
+                  f"Findings: {_dcounts['findings']}, Vectors: {_dcounts['vectors']}")
+
+            if hasattr(orchestrator, '_deliverable_connector') and orchestrator._deliverable_connector:
+                from mycelium.connectors import get_connector
+                connector = get_connector(orchestrator._deliverable_connector)
+                result = connector.deliver(deliverable_path, {})
+                if orchestrator._deliverable_connector == "mcp":
+                    print(f"  MCP server: {result.get('mcp_server_path', '')}")
+
+            # Write MCP README
+            readme_path = Path(orchestrator.run_dir) / "DELIVERABLE_README.md"
+            readme_path.write_text(
+                f"# Mycelium Deliverable — Run {orchestrator.run_id}\n\n"
+                f"## What's here\n\n"
+                f"- **deliverable.db** — SQLite knowledge graph with entities, observations, "
+                f"relationships, findings, and vector embeddings from this exploration run.\n"
+                f"- **obsidian_vault/** — Markdown files with wiki-links for browsing in Obsidian.\n"
+                f"- **report.md** — The exploration report.\n\n"
+                f"## Querying the deliverable\n\n"
+                f"### Direct SQL\n"
+                f"```bash\nsqlite3 deliverable.db\n"
+                f"SELECT name, entity_type, observation_count FROM entities ORDER BY observation_count DESC LIMIT 10;\n"
+                f"SELECT claim, confidence FROM observations WHERE entity_id = 'entity-name';\n```\n\n"
+                f"### Semantic search (requires sentence-transformers)\n"
+                f"```python\nfrom mycelium.deliverable import query_semantic\n"
+                f"results = query_semantic('deliverable.db', 'regulatory risk')\n"
+                f"for r in results[:5]: print(r['text'], r['similarity'])\n```\n\n"
+                f"### MCP server (for Claude Desktop)\n"
+                f"Generate and start the MCP server:\n"
+                f"```bash\npython3 run.py --source <source> --budget 0 --deliverable mcp\n"
+                f"python3 output/{orchestrator.run_id}/mcp_server.py\n```\n\n"
+                f"Add to Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):\n"
+                f"```json\n{{\n  \"mcpServers\": {{\n    \"mycelium\": {{\n"
+                f"      \"command\": \"python3\",\n"
+                f"      \"args\": [\"output/{orchestrator.run_id}/mcp_server.py\"]\n"
+                f"    }}\n  }}\n}}\n```\n"
+            )
+        except Exception as e:
+            print(f"  Deliverable generation skipped: {e}")
+            from mycelium import events
+            events.emit("deliverable_error", {"error": str(e)})
+
+        # Update per-corpus use-case graph (cumulative across runs)
+        try:
+            from mycelium.use_case_graph import update_use_case_graph
+            corpus_name = orchestrator.data_source.__class__.__name__
+            ucg_path = update_use_case_graph(
+                str(orchestrator.run_dir), orchestrator.run_id, corpus_name)
+            if ucg_path:
+                print(f"  Use-case graph: {ucg_path}")
+        except Exception as e:
+            print(f"  Use-case graph update skipped: {e}")
 
         # Reader test — score findings against charter
         try:

@@ -267,11 +267,16 @@ def _format_survey_summary(catalog_stats: dict) -> str:
     return "\n".join(parts) if parts else "(no survey results)"
 
 
-def _build_distributions(data_source) -> str:
+def _build_distributions(data_source, where_clause: str = None) -> str:
     """Build distribution summaries for numeric fields from the catalog DB.
 
+    Args:
+        data_source: corpus data source with _ensure_catalog_db
+        where_clause: optional SQL WHERE clause (without 'WHERE') to scope
+            distributions to a partition slice. If None, computes corpus-wide.
+
     Returns a formatted string with percentiles and segment counts for each
-    numeric field, ready for the engagement lead to use for partitioning.
+    numeric field, ready for any node to use for partitioning decisions.
     """
     if not hasattr(data_source, '_ensure_catalog_db'):
         return "(no catalog DB available for distributions)"
@@ -290,11 +295,14 @@ def _build_distributions(data_source) -> str:
     if not numeric_cols:
         return "(no numeric fields found)"
 
+    # Build WHERE fragment for scoped queries
+    base_where = f"{where_clause} AND" if where_clause else ""
+
     parts = []
     for col in numeric_cols:
         try:
             rows = db.execute(
-                f"SELECT {col} FROM records WHERE {col} IS NOT NULL ORDER BY {col}"
+                f"SELECT {col} FROM records WHERE {base_where} {col} IS NOT NULL ORDER BY {col}"
             ).fetchall()
             vals = [r[0] for r in rows if r[0] is not None]
         except sqlite3.OperationalError:

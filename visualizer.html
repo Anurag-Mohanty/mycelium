@@ -653,20 +653,35 @@ function handleEvent(evt) {
             break;
         }
 
-        case 'node_thinking': {
+        case 'node_thinking':
+        case 'thinking_chunk': {
             if (nodes.has(evt.node_id)) {
                 const n = nodes.get(evt.node_id);
-                // Append thinking chunks to a thinking array
                 if (!n.thinking_chunks) n.thinking_chunks = [];
-                n.thinking_chunks.push({ text: evt.text, turn: evt.turn || '' });
-                // Show in activity log
-                if (evt.chunk_index === 0) {
-                    // First chunk — show with node position
-                    addLogThinking(n.position, evt.text);
+                const text = evt.text || evt.chunk || '';
+                const turn = evt.turn || '';
+                n.thinking_chunks.push({ text, turn });
+                if (evt.chunk_index === 0 || n.thinking_chunks.length === 1) {
+                    addLogThinking(n.position, text);
                 }
-                // Update detail overlay if this node is selected
                 if (selectedNodeId === evt.node_id) showDetailOverlay(evt.node_id);
             }
+            break;
+        }
+
+        case 'partition_gate': {
+            const pos = evt.tree_position || '?';
+            const verdict = evt.verdict || '?';
+            const coverage = evt.completeness_pct != null ? evt.completeness_pct.toFixed(1) : '?';
+            const msg = `⊞ Gate ${pos}: ${verdict} (${coverage}% coverage)`;
+            addLog(msg, verdict === 'PASS' ? '#4CAF50' : '#F44336');
+            break;
+        }
+
+        case 'worker_fetch': {
+            const pos2 = evt.tree_position || '?';
+            const count = evt.fetch_count || 0;
+            addLog(`📥 Fetch ${pos2}: ${count} records requested`, '#2196F3');
             break;
         }
 
@@ -909,6 +924,23 @@ function handleEvent(evt) {
         case 'exploration_complete':
             document.getElementById('source-info').textContent = `Complete: ${evt.total_nodes} nodes, ${evt.total_observations} obs, $${(evt.total_cost||0).toFixed(2)}, ${formatTime((evt.elapsed_seconds||0)*1000)}`;
             finalizeAll();
+            break;
+
+        case 'deliverable_db_created': {
+            const ent = evt.entities || 0;
+            const obs3 = evt.observations || 0;
+            const findings = evt.findings || 0;
+            const vectors = evt.vectors || 0;
+            addLog(`📦 Deliverable: ${ent} entities, ${obs3} obs, ${findings} findings, ${vectors} vectors`, '#9C27B0');
+            break;
+        }
+
+        case 'obsidian_vault_created':
+            addLog(`📝 Obsidian vault: ${evt.file_count || 0} files`, '#9C27B0');
+            break;
+
+        case 'deliverable_error':
+            addLog(`⚠ Deliverable error: ${evt.error || '?'}`, '#F44336');
             break;
     }
 

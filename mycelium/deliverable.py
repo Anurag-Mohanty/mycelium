@@ -37,10 +37,22 @@ def generate_deliverable(run_dir: str, run_id: str) -> str:
     nodes = _load_nodes(run_path / "nodes")
     report_text = _load_text(run_path / "report.md")
 
-    # Populate tables
-    _insert_entities(conn, kg.get("entities", []))
-    _insert_observations(conn, kg.get("observations", []))
-    _insert_relationships(conn, kg.get("relationships", []))
+    # Filter to this run's data only (prevent entity leakage from cumulative KG)
+    run_observations = [o for o in kg.get("observations", [])
+                        if o.get("source_run_id") == run_id]
+    # Entities: include only those observed in this run
+    run_entity_ids = set(o.get("entity_id", "") for o in run_observations)
+    run_entities = [e for e in kg.get("entities", [])
+                    if e["id"] in run_entity_ids
+                    or e.get("first_observed_run") == run_id
+                    or e.get("last_observed_run") == run_id]
+    run_relationships = [r for r in kg.get("relationships", [])
+                         if r.get("source_run_id", "") == run_id]
+
+    # Populate tables (this run's data only)
+    _insert_entities(conn, run_entities)
+    _insert_observations(conn, run_observations)
+    _insert_relationships(conn, run_relationships)
     _insert_findings(conn, report_text)
     _insert_engagement_metadata(conn, metrics, kg, nodes, run_id)
 
@@ -300,41 +312,37 @@ def _insert_engagement_metadata(conn: sqlite3.Connection, metrics: dict,
 # --- Embedding layer ---
 
 def _generate_embeddings(conn: sqlite3.Connection, db_path: Path):
-    """Generate embeddings for entities and observations using OpenAI."""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        logger.warning("OPENAI_API_KEY not set — skipping embeddings")
-        return
+    """Generate embeddings for entities and observations using sentence-transformers.
 
+    Uses BAAI/bge-small-en-v1.5 locally — no API key required, fully portable.
+    Falls back gracefully if sentence-transformers is not installed.
+    """
     try:
-        import openai
+        from sentence_transformers import SentenceTransformer
     except ImportError:
-        logger.warning("openai package not installed — skipping embeddings")
+        logger.warning("sentence-transformers not installed — skipping embeddings")
         return
 
-    client = openai.OpenAI(api_key=api_key)
+    print("  [EMBEDDINGS] Loading model...")
+    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
 
     # Collect texts to embed
     texts = []  # (id, source_table, source_id, text)
 
-    # Entities: name + type + attributes + concatenated observation claims (first 500 tokens ~= 2000 chars)
+    # Entities: name + type + observation claims
     entities = conn.execute("SELECT id, name, entity_type, attributes FROM entities").fetchall()
     for e in entities:
         eid = e["id"]
         parts = [e["name"] or ""]
         if e["entity_type"]:
             parts.append(f"({e['entity_type']})")
-        attrs = e["attributes"]
-        if attrs and attrs != "{}":
-            parts.append(attrs[:200])
-        # Get observation claims for this entity
         obs = conn.execute(
             "SELECT claim FROM observations WHERE entity_id = ? LIMIT 10", (eid,)
         ).fetchall()
         claims = " ".join(o["claim"] for o in obs if o["claim"])
         if claims:
-            parts.append(claims[:2000])
-        text = " ".join(parts)[:2000]  # ~500 tokens
+            parts.append(claims[:500])
+        text = " ".join(parts)[:512]
         if text.strip():
             texts.append((f"ent-{eid}", "entity", eid, text))
 
@@ -342,37 +350,25 @@ def _generate_embeddings(conn: sqlite3.Connection, db_path: Path):
     observations = conn.execute("SELECT id, claim FROM observations").fetchall()
     for o in observations:
         if o["claim"] and o["claim"].strip():
-            texts.append((f"obs-{o['id']}", "observation", o["id"], o["claim"][:2000]))
+            texts.append((f"obs-{o['id']}", "observation", o["id"], o["claim"][:512]))
 
     if not texts:
         return
 
-    # Batch embed (OpenAI allows up to 2048 texts per call)
-    BATCH_SIZE = 512
-    for i in range(0, len(texts), BATCH_SIZE):
-        batch = texts[i:i + BATCH_SIZE]
-        batch_texts = [t[3] for t in batch]
-        try:
-            response = client.embeddings.create(
-                model="text-embedding-3-small",
-                input=batch_texts,
-            )
-        except Exception as e:
-            logger.warning(f"Embedding API call failed: {e}")
-            return
+    print(f"  [EMBEDDINGS] Encoding {len(texts)} texts...")
+    batch_texts = [t[3] for t in texts]
+    embeddings = model.encode(batch_texts, show_progress_bar=False, batch_size=256)
 
-        for j, emb_data in enumerate(response.data):
-            vec_id, source_table, source_id, text = batch[j]
-            embedding = emb_data.embedding
-            # Store as raw float32 bytes
-            blob = struct.pack(f"{len(embedding)}f", *embedding)
-            conn.execute(
-                "INSERT OR IGNORE INTO vectors (id, source_table, source_id, text, embedding) VALUES (?, ?, ?, ?, ?)",
-                (vec_id, source_table, source_id, text, blob),
-            )
+    for i, (vec_id, source_table, source_id, text) in enumerate(texts):
+        embedding = embeddings[i]
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        conn.execute(
+            "INSERT OR IGNORE INTO vectors (id, source_table, source_id, text, embedding) VALUES (?, ?, ?, ?, ?)",
+            (vec_id, source_table, source_id, text, blob),
+        )
 
     conn.commit()
-    logger.info(f"Embedded {len(texts)} texts into vectors table")
+    print(f"  [EMBEDDINGS] Embedded {len(texts)} texts into vectors table")
 
 
 # --- Semantic query ---
@@ -380,27 +376,15 @@ def _generate_embeddings(conn: sqlite3.Connection, db_path: Path):
 def query_semantic(db_path: str, query_text: str, k: int = 10) -> list[dict]:
     """Embed query text and return top-k similar entities/observations.
 
-    Requires OPENAI_API_KEY. Returns empty list if unavailable.
+    Uses sentence-transformers locally — no API key required.
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        return []
-
     try:
-        import openai
+        from sentence_transformers import SentenceTransformer
     except ImportError:
         return []
 
-    client = openai.OpenAI(api_key=api_key)
-    try:
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=[query_text],
-        )
-    except Exception:
-        return []
-
-    query_vec = response.data[0].embedding
+    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+    query_vec = model.encode([query_text])[0].tolist()
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

@@ -65,6 +65,15 @@ class RoleWorkerNode:
         self.status = "created"
         self._diagnostics = {}
         self._broadcast_post_ids = []  # post_ids this node broadcast
+        self._total_in_slice = None  # unlimited count of partition records
+        self._scope_distributions = ""  # field distributions for this node's scope
+        self._scope_record_count = "0"  # record count string for prompt
+
+    def _format_doc_count(self, sample_count: int) -> str:
+        """Format document count for prompt, including slice cardinality if known."""
+        if self._total_in_slice and self._total_in_slice > sample_count:
+            return f"{sample_count} of {self._total_in_slice:,} in your partition"
+        return str(sample_count)
 
     # === Bulletin board helpers ===
 
@@ -90,6 +99,8 @@ class RoleWorkerNode:
         if not self._bulletin_board or not broadcasts:
             return
         for b in broadcasts:
+            if isinstance(b, str):
+                b = {"post_type": "OBSERVATION", "content": b}
             post_type = b.get("post_type", "OBSERVATION")
             if post_type not in ("OBSERVATION", "HYPOTHESIS", "DEAD_END"):
                 post_type = "OBSERVATION"
@@ -230,6 +241,8 @@ class RoleWorkerNode:
             return self._result()
 
         formation = result.get("formation_assessment", {})
+        if isinstance(formation, str):
+            formation = {"decision": formation}
         decision = formation.get("decision", "investigate")
 
         if decision == "hire":
@@ -286,6 +299,8 @@ class RoleWorkerNode:
 
             # Parse role definition from hire directive
             role_data = hd.get("role", {})
+            if isinstance(role_data, str):
+                role_data = {"name": role_data}
             role = RoleDefinition(
                 name=role_data.get("name", f"hire_{i}"),
                 mission=role_data.get("mission", ""),
@@ -302,6 +317,14 @@ class RoleWorkerNode:
                 child_partition = self.directive.partition
                 if not child_partition:
                     self._log(f"  Hire '{role.name}': no partition authored, inheriting parent scope")
+
+            # Auto-intersect: if this node has a partition, the child's partition
+            # must be scoped within it. The child's filter is what's distinctive
+            # about its slice; the parent's filter constrains the universe.
+            if child_partition and self.directive.partition:
+                parent_filter = self.directive.partition
+                if parent_filter.strip().lower() not in child_partition.lower():
+                    child_partition = f"({parent_filter}) AND ({child_partition})"
 
             child_directive = Directive(
                 scope=Scope(
@@ -385,10 +408,17 @@ class RoleWorkerNode:
             self._log(f"All hires rejected. Resolving.")
             return self._result()
 
-        # Run children
+        # Run children with staggered launches so early resolvers can
+        # populate the bulletin board before late formers pull it.
         self.status = "waiting_for_hires"
+
+        async def _staggered_run(child, delay):
+            if delay > 0:
+                await asyncio.sleep(delay)
+            return await child.run()
+
         self.child_results = await asyncio.gather(
-            *[child.run() for child in self.child_workers],
+            *[_staggered_run(child, i * 3) for i, child in enumerate(self.child_workers)],
             return_exceptions=True,
         )
         self.child_results = [r for r in self.child_results if isinstance(r, dict)]
@@ -437,7 +467,7 @@ class RoleWorkerNode:
         for child in self.child_workers:
             role = child._role
             child_obs = child.observations
-            child_metrics = child.metrics
+            child_metrics = child.metrics if isinstance(child.metrics, dict) else {}
 
             obs_text = ""
             for i, obs in enumerate(child_obs, 1):
@@ -590,6 +620,8 @@ class RoleWorkerNode:
                 continue
 
             role_data = cd.get("role", {})
+            if isinstance(role_data, str):
+                role_data = {"name": role_data}
             role = RoleDefinition(
                 name=role_data.get("name", f"continuation_{i}"),
                 mission=role_data.get("mission", ""),
@@ -790,7 +822,7 @@ class RoleWorkerNode:
             valid_params = self.data_source.valid_filter_params()
             filters = {k: v for k, v in filters.items() if k in valid_params}
         documents = await self.data_source.fetch(filters, max_results=100)
-        fetched_data = _format_documents(documents) if documents else "(no data)"
+        fetched_data, _ = _format_documents(documents) if documents else ("(no data)", 0)
 
         prompt = _prompts.WORKER_EXTENSION_PROMPT_V2.format(
             role_name=self._role.name,
@@ -799,7 +831,7 @@ class RoleWorkerNode:
             initial_observations=obs_text,
             reassessment_reasoning=reasoning,
             extension_threads=thread_text,
-            doc_count=len(documents) if documents else 0,
+            doc_count=self._format_doc_count(len(documents)) if documents else "0",
             fetched_data=fetched_data,
         )
 
@@ -1011,10 +1043,14 @@ class RoleWorkerNode:
 
     async def _reason(self) -> dict | None:
         """Single LLM call with formation-time assessment."""
-        # Engagement lead (depth 0) gets corpus metadata, not sample records.
-        # This prevents scope confusion where it reasons about 100 records
-        # as if they were the full corpus.
-        if self.depth == 0 and not self.directive.partition:
+        # DATA-INPUT BRANCH — the one legitimate code branch on node identity.
+        # A node with no partition and no filters (true only for the first node,
+        # because no parent exists to assign a partition) receives corpus metadata
+        # instead of sample records. This prevents scope confusion where it would
+        # reason about 100 records as if they were the full corpus. Every other
+        # node has a partition or filters from its parent and fetches records normally.
+        has_filters = bool(self.directive.data_filter or self.directive.scope.filters)
+        if self.depth == 0 and not self.directive.partition and not has_filters:
             cat_meta = self.data_source.catalog_metadata() if hasattr(self.data_source, 'catalog_metadata') else {}
             total = cat_meta.get("total_records", 0)
             fields = cat_meta.get("fields", [])
@@ -1025,14 +1061,14 @@ class RoleWorkerNode:
                 "fields": field_summary,
                 "note": (f"This is corpus metadata, not sample records. "
                          f"The corpus contains {total:,} records with fields: {field_summary}. "
-                         f"You are the engagement lead — your job is to design the team, "
-                         f"not analyze records directly. Hire specialists and partition "
-                         f"the corpus across them."),
+                         f"Your job is to design the team and partition the corpus."),
             }]
-            # Skip partition/filter paths — go straight to prompt construction
             self._translation_interpretation = ""
-            # Jump past the data-fetching block
-            fetched_data = _format_documents(documents)
+            # Corpus-wide distributions for the first node
+            from .equip import _build_distributions
+            self._scope_distributions = _build_distributions(self.data_source)
+            self._scope_record_count = f"{total:,}"
+            fetched_data, _ = _format_documents(documents)
             return await self._reason_with_data(documents, fetched_data)
 
         # Fetch data — partition path or legacy filter path
@@ -1046,7 +1082,7 @@ class RoleWorkerNode:
             translation = await translate_partition(
                 partition=self.directive.partition,
                 data_source=self.data_source,
-                max_records=100,
+                max_records=500,  # fetch all available; _format_documents handles context fit
                 run_dir=run_dir,
                 hire_id=self.node_id[:8],
             )
@@ -1057,8 +1093,13 @@ class RoleWorkerNode:
             if translation.success and translation.records:
                 documents = translation.records
                 self._translation_interpretation = translation.interpretation
+                self._total_in_slice = translation.total_in_slice
+                self._scope_distributions = translation.slice_distributions or ""
+                self._scope_record_count = (f"{translation.total_in_slice:,}"
+                                            if translation.total_in_slice else str(translation.record_count))
+                total_str = f" of {translation.total_in_slice:,}" if translation.total_in_slice else ""
                 self._log(f"Partition translated: '{self.directive.partition[:50]}' → "
-                          f"{translation.record_count} records (${translation.cost:.3f})")
+                          f"{translation.record_count}{total_str} records (${translation.cost:.3f})")
             else:
                 self._log(f"Partition translation failed: {translation.error}. "
                           f"Falling back to filter path.")
@@ -1085,32 +1126,27 @@ class RoleWorkerNode:
                     filters = {k: v for k, v in filters.items() if k in valid_params}
 
             documents = await self.data_source.fetch(filters, max_results=100)
+            if not self._scope_distributions:
+                self._scope_record_count = str(len(documents)) if documents else "0"
 
         if not documents:
             return None
 
-        # Scope-fit check: do the records match the partition intent?
-        if self.directive.partition and self._translation_interpretation and not self.envelope_exhausted:
-            scope_fit = await self._check_scope_fit(documents)
-            if scope_fit == "MISMATCH":
-                self._log(f"Scope-fit MISMATCH: records don't match partition intent")
-                # Return a result that surfaces the mismatch to the parent
-                return {
-                    "observations": [],
-                    "hire_directives": [],
-                    "formation_assessment": {
-                        "decision": "investigate",
-                        "reasoning": f"SCOPE_FIT_MISMATCH: partition '{self.directive.partition[:80]}' "
-                                     f"translated as '{self._translation_interpretation}' but "
-                                     f"records don't match scope '{self.directive.scope.description[:100]}'"
-                    },
-                    "self_evaluation": {"bar_met": False, "purpose_addressed": False,
-                                        "purpose_gap": "Records did not match partition intent"},
-                }
+        # Scope-fit check removed. The MECE partition gate enforces that records
+        # tile the corpus correctly. A semantic recheck of records against the
+        # scope description prose added no signal beyond the gate and produced
+        # ~12% false positives that killed workers before they could do work.
 
-        # Format data and build prompt
-        fetched_data = _format_documents(documents)
-        return await self._reason_with_data(documents, fetched_data)
+        # Format data and build prompt — includes full content for as many
+        # records as fit in context. Worker sees doc_count for total in partition.
+        fetched_data, records_shown = _format_documents(documents)
+        # Update doc_count to reflect what's actually shown vs total in partition
+        if records_shown < len(documents):
+            self._scope_record_count = (
+                f"{self._total_in_slice:,}" if self._total_in_slice
+                else str(len(documents))
+            )
+        return await self._reason_with_data(documents[:records_shown], fetched_data)
 
     async def _reason_with_data(self, documents: list, fetched_data: str) -> dict | None:
         """Build prompt and make LLM call. Shared by engagement lead and worker paths."""
@@ -1187,8 +1223,12 @@ class RoleWorkerNode:
             phase_remaining = self._budget_pool.exploration_remaining()
 
         import datetime
+
+        # Unified prompt — same for all nodes regardless of depth or role
         prompt = _prompts.NODE_REASONING_PROMPT_V2.format(
             current_date=datetime.date.today().isoformat(),
+            scope_record_count=self._scope_record_count,
+            scope_distributions=self._scope_distributions or "(no distributions available)",
             role_name=self._role.name or "investigator",
             role_mission=self._role.mission or "Produce the most insightful findings this data can yield.",
             role_bar=self._role.success_bar or "Produce specific, evidence-backed findings.",
@@ -1207,7 +1247,7 @@ class RoleWorkerNode:
             leaf_viable_envelope=self.leaf_viable_envelope,
             depth_guidance=depth_guidance,
             budget_stage=budget_stage,
-            doc_count=len(documents),
+            doc_count=self._format_doc_count(len(documents)),
             fetched_data=fetched_data,
             board_context=board_context,
             force_resolve=force_resolve,
@@ -1235,12 +1275,209 @@ class RoleWorkerNode:
         _emit_thinking_chunks(self.node_id, "formation", thinking)
 
         try:
-            result = _parse_json(output)
+            result = _normalize_result(_parse_json(output))
         except (json.JSONDecodeError, ValueError):
+            result = None
+
+        # Thinking exhaustion: if thinking mentions hiring/partitioning but
+        # no usable JSON was produced (empty, parse failure, or missing key fields),
+        # retry with a focused prompt that only asks for the structured output.
+        hiring_keywords = ("hire", "partition", "team", "role", "worker")
+        is_empty_result = (result is None
+                          or not result.get("formation_assessment")
+                          or (not result.get("observations") and not result.get("hire_directives")))
+        if is_empty_result and thinking and any(kw in thinking.lower() for kw in hiring_keywords):
+            self._log("Thinking exhaustion during hiring — retrying with focused prompt")
+            retry_result = await self._retry_hiring_output(thinking, prompt)
+            if retry_result:
+                return retry_result
+
+        if result is None:
             return {"observations": [], "hire_directives": [],
                     "formation_assessment": {"decision": "investigate", "reasoning": "parse failure"}}
 
+        # Fetch loop: if worker requested full content for specific records,
+        # fetch them and do a second pass with the full content appended.
+        fetch_ids = result.get("fetch_records", [])
+        if fetch_ids and isinstance(fetch_ids, list):
+            fetch_ids = fetch_ids[:10]  # cap at 10
+            fetched_result = await self._handle_fetch_and_rerun(
+                fetch_ids, documents, result, prompt)
+            if fetched_result:
+                return fetched_result
+
         return result
+
+    async def _handle_fetch_and_rerun(
+        self, fetch_ids: list, documents: list, first_result: dict, original_prompt: str,
+    ) -> dict | None:
+        """Fetch full records and re-run investigation with full content."""
+        self._log(f"Worker requested {len(fetch_ids)} full records: {fetch_ids[:5]}")
+
+        # Build a lookup from the sample documents
+        doc_index = {}
+        for doc in documents:
+            doc_id = doc.get("id", doc.get("name", ""))
+            if doc_id:
+                doc_index[str(doc_id)] = doc
+
+        # Fetch full records from catalog DB
+        full_records = []
+        if hasattr(self.data_source, '_ensure_catalog_db'):
+            self.data_source._ensure_catalog_db()
+            db = self.data_source._catalog_db
+            for rid in fetch_ids:
+                try:
+                    # Try id column first, then name, then company
+                    row = None
+                    for col in ("id", "name", "company"):
+                        try:
+                            row = db.execute(
+                                f"SELECT * FROM records WHERE {col} = ? LIMIT 1",
+                                (str(rid),)
+                            ).fetchone()
+                            if row:
+                                break
+                        except Exception:
+                            continue
+                    if row:
+                        full_records.append(dict(row))
+                except Exception:
+                    continue
+
+        if not full_records:
+            self._log("Fetch returned no records — proceeding with initial result")
+            return None
+
+        self._log(f"Fetched {len(full_records)} full records")
+
+        # Format full records — cap total content to ~150K chars (~40K tokens)
+        # to stay within the 200K token context limit
+        MAX_CONTENT_CHARS = 150_000
+        full_lines = []
+        total_chars = 0
+        for rec in full_records:
+            parts = []
+            for k, v in rec.items():
+                if v is not None and v != "" and v != []:
+                    val_str = str(v)
+                    # Per-field cap: 30K chars (~8K tokens) to allow multiple records
+                    if len(val_str) > 30_000:
+                        val_str = val_str[:30_000] + f"... [truncated at 30K of {len(str(v)):,} chars]"
+                    parts.append(f"{k}: {val_str}")
+            record_str = "{" + ", ".join(parts) + "}"
+            if total_chars + len(record_str) > MAX_CONTENT_CHARS:
+                full_lines.append(f"[{len(full_records) - len(full_lines)} more records omitted — content budget exceeded]")
+                break
+            full_lines.append(record_str)
+            total_chars += len(record_str)
+        full_content = "\n\n".join(full_lines)
+
+        # Log fetch for diagnostics
+        events.emit("worker_fetch", {
+            "node_id": self.node_id,
+            "tree_position": self.pos,
+            "fetch_count": len(full_records),
+            "fetch_ids": [str(r.get("id", r.get("name", "?")))[:50] for r in full_records],
+        })
+
+        # Second LLM call with full content — includes the JSON output schema
+        # so the LLM knows what structure to produce.
+        rerun_prompt = (
+            f"You previously analyzed preview data and requested full content for "
+            f"{len(full_records)} records. Here is the full content.\n\n"
+            f"YOUR ROLE: {self._role.name}\n"
+            f"YOUR MISSION: {self._role.mission}\n"
+            f"YOUR BAR: {self._role.success_bar}\n\n"
+            f"YOUR INITIAL ANALYSIS:\n"
+            f"Survey: {first_result.get('survey', '')[:500]}\n"
+            f"Initial observations: {len(first_result.get('observations', []))} produced\n\n"
+            f"FULL RECORDS ({len(full_records)} items, complete content):\n"
+            f"{full_content}\n\n"
+            f"Now produce your final output. Your observations should be grounded "
+            f"in the full content you just read — cite specific text, named risks, "
+            f"regulatory references, or litigation details from the records above.\n\n"
+            f"Return JSON with this exact structure:\n"
+            f'{{\n'
+            f'    "survey": "your inventory of what the full content reveals",\n'
+            f'    "observations": [\n'
+            f'        {{\n'
+            f'            "raw_evidence": "SPECIFIC text, quotes, or data from the full records",\n'
+            f'            "statistical_grounding": "discovered during full-content investigation",\n'
+            f'            "local_hypothesis": "specific explanation grounded in the content",\n'
+            f'            "source": {{\n'
+            f'                "doc_id": "record identifier",\n'
+            f'                "title": "company or record name",\n'
+            f'                "agency": "source entity",\n'
+            f'                "date": "date",\n'
+            f'                "section": "section if applicable",\n'
+            f'                "url": "URL if available"\n'
+            f'            }},\n'
+            f'            "observation_type": "type",\n'
+            f'            "confidence": 0.85,\n'
+            f'            "confidence_rationale": "why this confidence",\n'
+            f'            "signal_strength": "data_originated_novel",\n'
+            f'            "surprising_because": "expected vs actual"\n'
+            f'        }}\n'
+            f'    ],\n'
+            f'    "unresolved": ["things noticed but not investigated"]\n'
+            f'}}\n\n'
+            f"Respond ONLY with valid JSON, no other text."
+        )
+
+        # Budget gate
+        if self.envelope_exhausted:
+            return None
+        if self._budget_pool and self._budget_pool.exploration_exhausted:
+            return None
+
+        async with self._semaphore:
+            thinking2, output2, cost2, usage2 = await _call_llm(rerun_prompt)
+
+        self.spent += cost2
+        self.token_usage["input_tokens"] += usage2["input_tokens"]
+        self.token_usage["output_tokens"] += usage2["output_tokens"]
+        if self._budget_pool:
+            self._budget_pool.record("exploration", cost2)
+        self.thinking_log.append({"turn": "fetch_rerun", "thinking": thinking2})
+        _emit_thinking_chunks(self.node_id, "fetch_rerun", thinking2)
+
+        try:
+            result2 = _parse_json(output2)
+        except (json.JSONDecodeError, ValueError):
+            self._log("Fetch rerun produced unparseable output — using initial result")
+            return None
+
+        self._log(f"Fetch rerun produced {len(result2.get('observations', []))} observations")
+        return result2
+
+    async def _retry_hiring_output(self, thinking: str, original_prompt: str) -> dict | None:
+        """Retry when thinking exhausted during hiring — focused call for JSON only."""
+        retry_prompt = (
+            f"You were reasoning about how to partition and hire for this scope. "
+            f"Your thinking reached this conclusion:\n\n"
+            f"{thinking[-2000:]}\n\n"
+            f"Now produce the JSON output. The partitioning task and role authoring "
+            f"sections from the original prompt apply. Produce ONLY the JSON output "
+            f"with formation_assessment, distributional_commit, hire_directives, "
+            f"synthesis_role, self_evaluation, unresolved, and broadcasts fields.\n\n"
+            f"Respond ONLY with valid JSON, no other text."
+        )
+        if self.envelope_exhausted:
+            return None
+        try:
+            async with self._semaphore:
+                _, output, cost, usage = await _call_llm(retry_prompt)
+            self.spent += cost
+            self.token_usage["input_tokens"] += usage["input_tokens"]
+            self.token_usage["output_tokens"] += usage["output_tokens"]
+            if self._budget_pool:
+                self._budget_pool.record("exploration", cost)
+            self.thinking_log.append({"turn": "formation_retry", "thinking": ""})
+            return _parse_json(output)
+        except Exception as e:
+            self._log(f"Hiring retry failed: {e}")
+            return None
 
     def _parse_observations(self, obs_list: list) -> list[dict]:
         """Parse observation dicts from LLM output."""
@@ -1364,32 +1601,76 @@ def _extract_charter_section(charter: str, section_name: str) -> str:
 
 # === Utility functions (shared patterns with worker.py) ===
 
-def _format_documents(docs: list[dict]) -> str:
-    """Format documents for prompt context."""
+def _format_documents(docs: list[dict]) -> tuple[str, int]:
+    """Format documents for prompt context.
+
+    Includes full content for as many records as fit in context.
+    No truncation, no metadata summaries. The worker sees complete records
+    and knows from doc_count how many more exist in its partition.
+    If it can't see them all, it hires.
+
+    Returns (formatted_text, records_included).
+    """
     if not docs:
-        return "(no data)"
+        return "(no data)", 0
+
+    CONTEXT_BUDGET = 600_000  # chars (~150K tokens, leaves room for prompt + output)
+    total_chars = 0
     lines = []
-    for doc in docs[:100]:
+
+    for doc in docs:
         parts = []
         for k, v in doc.items():
             if v is not None and v != "" and v != []:
-                val_str = str(v)
-                if len(val_str) > 200:
-                    val_str = val_str[:200] + "..."
-                parts.append(f"{k}: {val_str}")
-        lines.append("{" + ", ".join(parts) + "}")
-    return "\n".join(lines)
+                parts.append(f"{k}: {v}")
+        formatted = "{" + ", ".join(parts) + "}"
+
+        if total_chars + len(formatted) > CONTEXT_BUDGET:
+            break
+        lines.append(formatted)
+        total_chars += len(formatted)
+
+    return "\n".join(lines), len(lines)
 
 
 async def _call_llm(prompt: str) -> tuple[str, str, float, dict]:
-    """Call Claude with extended thinking. Returns (thinking, output, cost, usage)."""
+    """Call Claude with extended thinking and prompt caching.
+
+    Splits the prompt at the DATA marker so stable content (role, schema,
+    instructions) is cached across calls while variable content (records,
+    board state) is fresh each time.
+    """
     client = anthropic.Anthropic()
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=16000,
-        thinking={"type": "enabled", "budget_tokens": 8000},
-        messages=[{"role": "user", "content": prompt}],
-    )
+
+    # Split prompt: stable instructions (steps, schema, rules) go into the
+    # system message with cache_control so they're cached across all worker
+    # calls in the run. Variable content (role, scope, data) goes in user.
+    # The steps section starts at "STEP 1" and runs to end of prompt.
+    step_marker = "STEP 1"
+    step_idx = prompt.find(step_marker)
+
+    if step_idx > 500:
+        user_text = prompt[:step_idx].rstrip()
+        system_text = prompt[step_idx:]
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=16000,
+            thinking={"type": "enabled", "budget_tokens": 8000},
+            system=[{
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": user_text}],
+        )
+    else:
+        # Fallback for prompts without the DATA marker (rerun, retry, etc.)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=16000,
+            thinking={"type": "enabled", "budget_tokens": 8000},
+            messages=[{"role": "user", "content": prompt}],
+        )
 
     thinking = ""
     output = ""
@@ -1402,8 +1683,15 @@ async def _call_llm(prompt: str) -> tuple[str, str, float, dict]:
     usage = {
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
+        "cache_creation_input_tokens": getattr(response.usage, "cache_creation_input_tokens", 0),
+        "cache_read_input_tokens": getattr(response.usage, "cache_read_input_tokens", 0),
     }
-    cost = (usage["input_tokens"] * 3 + usage["output_tokens"] * 15) / 1_000_000
+    # Cached reads cost 0.30/M (90% discount), cache writes cost 3.75/M (25% premium)
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_write = usage.get("cache_creation_input_tokens", 0)
+    base_input = usage["input_tokens"] - cache_read - cache_write
+    cost = (base_input * 3 + cache_write * 3.75 + cache_read * 0.30
+            + usage["output_tokens"] * 15) / 1_000_000
     return thinking, output, cost, usage
 
 
@@ -1423,6 +1711,57 @@ def _parse_json(text: str) -> dict:
     if start >= 0 and end > start:
         return json.loads(text[start:end])
     raise ValueError("Could not extract JSON")
+
+
+def _normalize_result(result: dict) -> dict:
+    """Normalize LLM output to prevent 'str' object has no attribute 'get' errors.
+
+    The LLM sometimes outputs fields as strings where dicts are expected.
+    This normalizes at the parsing layer so all consumers see expected shapes.
+    """
+    if not isinstance(result, dict):
+        return {"observations": [], "hire_directives": [],
+                "formation_assessment": {"decision": "investigate", "reasoning": "malformed output"}}
+
+    # formation_assessment: expect dict, sometimes get string
+    fa = result.get("formation_assessment")
+    if isinstance(fa, str):
+        result["formation_assessment"] = {"decision": fa, "reasoning": ""}
+
+    # hire_directives: expect list of dicts, sometimes get list of strings
+    hires = result.get("hire_directives", [])
+    if isinstance(hires, list):
+        normalized_hires = []
+        for h in hires:
+            if isinstance(h, str):
+                normalized_hires.append({"role": {"name": h}, "partition": "", "scope_description": h})
+            elif isinstance(h, dict):
+                # Normalize role field within each hire
+                role = h.get("role", {})
+                if isinstance(role, str):
+                    h["role"] = {"name": role}
+                normalized_hires.append(h)
+        result["hire_directives"] = normalized_hires
+
+    # synthesis_role: expect dict, sometimes get string
+    sr = result.get("synthesis_role")
+    if isinstance(sr, str):
+        result["synthesis_role"] = {"name": sr}
+
+    # broadcasts: expect list of dicts, sometimes get list of strings
+    broadcasts = result.get("broadcasts", [])
+    if isinstance(broadcasts, list):
+        result["broadcasts"] = [
+            b if isinstance(b, dict) else {"post_type": "OBSERVATION", "content": str(b)}
+            for b in broadcasts
+        ]
+
+    # self_evaluation: expect dict, sometimes get string
+    se = result.get("self_evaluation")
+    if isinstance(se, str):
+        result["self_evaluation"] = {"purpose_addressed": True, "evidence_quality": "medium"}
+
+    return result
 
 
 def _emit_thinking_chunks(node_id: str, turn: str, thinking: str, chunk_size: int = 500):

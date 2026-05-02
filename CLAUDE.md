@@ -34,6 +34,34 @@
 
 ---
 
+## Architectural Invariants — Do Not Violate
+
+These rules are the architecture, not implementation details. Violating them is not a tradeoff or a shortcut — it produces a different system that no longer matches the PRD.
+
+### 1. The unified node primitive
+
+There is one node class, one node prompt, one code path for formation and investigation. Engagement leads, workers, and managers are descriptive labels for the role a node ended up playing — not structural categories. The same code runs at depth 0, depth 1, and depth 5.
+
+If you find yourself adding a separate prompt constant, a separate class, or a code branch that selects different formation logic based on depth, position, or labels like "is_engagement_lead" — stop. That is the drift this rule exists to prevent.
+
+The one legitimate code branch on node identity is the data-input branch in `worker_v2.py`: a node with no partition (which is true only for the first node, because no parent exists to assign one) receives corpus metadata instead of records. This branch is documented in a comment at the call site. Do not add other branches of this kind.
+
+### 2. Roles are authored by LLM nodes, not by code
+
+A role definition (name, mission, bar, heuristic) describes what kind of cognition this node performs. Every role in the system is authored by another LLM node — its parent. The engagement lead is the only exception: its role is authored by the orchestrator at startup, because no parent exists.
+
+Do not hardcode role definitions in code. Do not select roles from a static list. Do not template roles based on depth, dimension, or any other code-level signal. Roles emerge from the LLM's reasoning about scope and team design. If a role appears in the system without an LLM having authored it, the architecture has drifted.
+
+### 3. Code is plumbing, the LLM is the explorer
+
+This is the existing principle. It is reaffirmed here for emphasis: any architectural decision that moves reasoning out of the LLM and into code violates this principle. The structural input the LLM needs (distributions, cardinality, schema) is computed by code and shown to the LLM. The decision about how to use that input — what to partition on, what break points to choose, what roles to author — is always the LLM's.
+
+### 4. Validation is corpus-grounded, not text-based
+
+The validator runs four parallel operations on each finding, all grounded in the corpus the workers examined: (1) Factual Re-Query fetches actual records to confirm/refute specific claims, (2) Triangulation counts independent observations from different partitions supporting the same pattern, (3) Falsification actively tries to disprove the finding using corpus evidence, (4) Surprise Scoring compares against the common-knowledge briefing. The validator has the same data source access workers have. It does not evaluate findings by reading their text alone — it re-checks claims against the data.
+
+---
+
 ## What This Is
 
 An autonomous discovery framework that finds unknown patterns in any information space. Point it at a data source, give it a budget, and it decides what to explore, how deep to go, and what to report. Demonstrated on npm registry (100K+ packages) and SEC EDGAR (41K+ 10-K filings).

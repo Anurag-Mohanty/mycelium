@@ -83,6 +83,8 @@ Every node in the system is the same primitive. "Manager" and "worker" are descr
 
 **Data partitioning:** The engagement lead partitions the corpus into non-overlapping slices using record field filters (e.g., `dependency_count = 0`, `maintainer_count >= 2`). EQUIP provides field distributions so the engagement lead knows where natural break points are. The MECE partition gate verifies every partition set tiles its parent scope before children execute. Different slices produce divergent findings because workers examine genuinely different data.
 
+**Dynamic context fitting:** Workers receive full record content — no artificial truncation. The system includes as many complete records as fit within context limits. When a worker's partition contains more records than it can read in a single pass, it sees "7 of 80 in your partition" and reasons about whether to hire sub-workers to cover the rest. This enables recursive depth on content-heavy corpora (e.g., full interview transcripts) where each worker reads what fits and delegates the remainder.
+
 ## Budget System
 
 - **BudgetPool** — shared atomic pool with phase limits
@@ -109,6 +111,8 @@ Every finding passes through:
 | npm Registry | 3.97M packages, 100K enriched with full metadata | None | Cached (~4 hours first time) |
 | SEC EDGAR | 26,495 10-K filings from 6,966 companies | None (User-Agent) | Cached (~50 min first time) |
 | Federal Register | US federal regulations | None | On-demand |
+| USAspending | Federal contracts and grants | None | On-demand |
+| Lenny's Podcast | 319 episode transcripts | Local files | Pre-built catalog |
 
 Adding a new source: implement `survey()`, `fetch()`, `fetch_bulk_metadata()`, `filter_schema()`, and `close()`. See `mycelium/data_sources/base.py`.
 
@@ -154,11 +158,14 @@ mycelium/
   knowledge_graph.py   # SQLite-backed persistent graph
   deliverable.py       # Deliverable DB with embeddings
   obsidian_export.py   # Obsidian vault export
+  use_case_graph.py    # Per-corpus cumulative knowledge DB
   data_sources/
     base.py            # DataSource interface + filter_schema() + query_catalog()
     npm_registry.py    # npm connector
     sec_edgar.py       # SEC EDGAR connector
     federal_register.py
+    usaspending.py     # USAspending federal contracts
+    lenny_podcast.py   # Lenny's Podcast transcripts
 run.py                 # CLI entry point
 visualizer.html        # D3.js real-time tree visualization
 docs/
@@ -191,9 +198,9 @@ Each run produces `output/{run_id}/` containing:
 
 - Model: Claude Sonnet ($3/M input, $15/M output)
 - Extended thinking: 8000 token budget per node
-- Typical $1 run: ~5 nodes, ~26 observations, depth 1 (partition gate validation)
-- Typical $5 run: ~20 nodes, ~100 observations, depth 2-3
-- Typical $10 run: ~45 nodes, ~180 observations, depth 3-4
+- Typical $5 run: ~11 nodes, ~77 observations, depth 1-2
+- Typical $10 run: ~20 nodes, ~100 observations, depth 2-3
+- Typical $30 run: ~46 nodes, ~237 observations, depth 3 (full transcript analysis)
 
 ## Core Principle
 

@@ -1502,6 +1502,16 @@ Respond ONLY with valid JSON, no other text.
 NODE_REASONING_PROMPT_V2 = """\
 Today's date is {current_date}.
 
+<scope_structure>
+SCOPE: {scope_record_count} records
+
+FIELD DISTRIBUTIONS (within your scope):
+{scope_distributions}
+
+SCHEMA:
+{filter_schema}
+</scope_structure>
+
 YOUR ROLE:
 Name: {role_name}
 Mission: {role_mission}
@@ -1526,14 +1536,6 @@ is not slacking — it is honest assessment of what the work supports.
 CONTEXT FROM YOUR MANAGER (if any):
 {parent_context}
 
-{workspace_context}
-
-DATA SOURCE FILTER SCHEMA:
-{filter_schema}
-
-When creating hire directives, use ONLY the filter parameter names listed \
-above with values that will match actual records you saw in your data.
-
 BUDGET:
 Allocated: ${budget_remaining:.2f}
 Parent pool: ~${parent_pool_remaining:.2f}
@@ -1548,7 +1550,17 @@ Minimum hire envelope: ${leaf_viable_envelope:.2f}
 DATA ({doc_count} items):
 {fetched_data}
 
+FETCH CAPABILITY: If any field above shows "[truncated, N chars total — \
+fetch full content via fetch_record(id)]", you can request full content \
+for up to 10 specific records. Include a "fetch_records" array in your \
+JSON output with the record IDs you want to read in full. The system \
+will fetch them and give you a second pass with the full content.
+
 {board_context}
+
+<charter>
+{workspace_context}
+</charter>
 
 {force_resolve}
 
@@ -1573,6 +1585,14 @@ How much of your context is consumed by your role definition and parent \
 context, leaving how much for actual data? If the scope exceeds what one \
 careful pass can cover at the depth your bar demands, hiring is warranted.
 
+IMPORTANT: You see 100 sample records, but your scope may contain thousands \
+or tens of thousands. Reading 100 samples is NOT the same as analyzing the \
+full corpus at depth. If your bar requires content-level analysis (reading \
+actual text, comparing language across documents, identifying specific \
+entities and patterns in filings), and your scope contains thousands of \
+records, one pass over 100 samples will not meet your bar. Hire specialists \
+who each examine their partition's content at depth.
+
 Hire when the scope has dimensions requiring distinct cognition you cannot \
 bring yourself, OR the scope at required depth exceeds your capacity for \
 one pass. Both must be reasoned concretely, not asserted.
@@ -1596,9 +1616,8 @@ If yes, include it. Then check: "Does this at least clear my bar?" If \
 not, it does not go in your output regardless of how interesting it is. \
 The mission pushes you to find the best work; the bar catches failure.
 
-If the charter is present in your workspace context, check the output \
-against the charter's standards as well. The bar fires first; the charter \
-fires second.
+If the charter is present above, check the output against the charter's \
+standards as well. The bar fires first; the charter fires second.
 
 For any value you rely on: do the other fields in the same record \
 corroborate it or contradict it? If contradicted, you do not trust \
@@ -1609,81 +1628,84 @@ Proceed to Step 4 (output).
 STEP 3 — DESIGN YOUR TEAM (only if hiring)
 
 You have decided you cannot do this work alone. You are now a manager. \
-Your job shifts from investigating to organizing.
+Your job has two phases, in strict order.
 
-For each hire you need:
+BUDGET-CAPACITY CHECK (do this first, before designing partitions):
 
-A. What role do they play? Give it a name that captures the kind of \
-   cognition they bring to this work, not just a topic label.
+Look at your allocated budget above. Each child worker costs:
+- ~$0.40-0.50 if the corpus has text content (workers will fetch and read)
+- ~$0.20-0.30 if the corpus is metadata-only
 
-B. Why does this hire exist? State the specific dimension of the work \
-   this hire addresses and why it requires cognition distinct from yours \
-   and from the other hires. A hire without a grounded justification is \
-   not a real hire.
+Calculate how many children you can properly fund:
+  children_affordable = your_budget / per_child_cost
 
-C. What is their mission? What does excellent work look like for this \
-   hire in this engagement? A direction that pushes beyond adequate. \
-   The mission is what you want; the bar is what you will accept.
+Design THAT MANY partitions, not more. Children that cannot be funded \
+produce nothing — worse than fewer children with broader scopes. \
+Prefer 4-8 well-funded children over 12-20 starved ones.
 
-D. What is their bar? The minimum acceptable output — below this is \
-   failure. Be specific enough that when they return, you can judge \
-   whether they met it. The bar must be concrete enough to fail against.
+<partitioning_task>
+PHASE A: COMMIT TO PARTITIONS
 
-E. What is their heuristic? When they face an ambiguous decision during \
-   their work, what posture should they take?
+Before authoring roles, commit to how you will partition your scope.
 
-F. What data slice do they examine? Your PRIMARY JOB is to partition \
-   the corpus into non-overlapping slices that together cover every \
-   record exactly once. Each hire gets one slice.
+Pick ONE field from the <scope_structure> distributions above. Pick break \
+points from the percentiles shown. Produce partitions that tile your \
+scope exactly. The number of partitions MUST fit your budget-capacity \
+check above.
 
-   A PARTITION is a filter condition over record fields:
-   - "maintainer_count = 1" — selects a specific subset
-   - "monthly_downloads between 5000 and 100000" — selects a range
-   - "created before 2020-01-01" — selects by date
+Rules:
+- Use ONE dimension only. Do not combine fields (no "field_a = X AND field_b = Y").
+- Use the percentile values shown in the distributions as break points.
+- Every record in your scope must be in exactly one partition. No gaps, no overlaps.
+- The partition gate will HALT the run if these rules are violated.
+- Create AT MOST the number of partitions your budget-capacity check allows.
 
-   A LENS is an analytical question (NOT a partition):
-   - "coordination patterns" — not a field, can't be filtered
-   - "temporal anomalies" — analytical concept, not a data attribute
-   - "structural chokepoints" — investigative angle, not a record filter
-   - "supply chain risks" — what to look for, not which records
+Example using a field with min=0, p25=1, median=5, p75=20, max=500:
+  Partition 1: field_name <= 1       (covers ~25% of records)
+  Partition 2: field_name > 1 AND field_name <= 5   (~25%)
+  Partition 3: field_name > 5 AND field_name <= 20  (~25%)
+  Partition 4: field_name > 20       (~25%)
 
-   You MUST author partitions, not lenses. The system translates each \
-   partition to a SQL query. If it can't translate, the run halts.
+Commit to your partitions now. Place them in the "distributional_commit" \
+field of your JSON output.
 
-   Your partitions MUST tile the corpus:
-   - COMPLETE: every record in the corpus is in exactly one partition
-   - EXCLUSIVE: no record is in two partitions
-   - FILTERABLE: each partition uses field names and values from the \
-     corpus schema (see the Partitioning Guide in SKILL.md)
+Do not consider what is interesting to investigate. Do not think about \
+themes, patterns, or analytical questions yet. Your only task in Phase A \
+is to divide the population along one measurable dimension.
+</partitioning_task>
 
-   Use the field distributions from your workspace context to pick \
-   break points. Example: if maintainer_count has 78K records at 1, \
-   10K at 2-5, and 13K at 6+, partition on those breaks. Each worker \
-   gets a roughly balanced slice of the corpus.
+<role_authoring_task>
+PHASE B: AUTHOR ROLES FOR EACH PARTITION
 
-   The worker decides what to look for within their slice. You decide \
-   which slice each worker gets. The lens is the worker's tool. The \
-   partition is your deliverable.
+Now read the charter above. Your partitions are fixed — do not change them.
 
-G. What scope description do they get? Describe what this hire \
-   investigates in terms that ground to their data assignment. The \
-   scope should reference the data they'll actually see.
+For each partition, author ONE hire role:
 
-H. What budget do they get? Each hire must receive at least \
-   ${leaf_viable_envelope:.2f}. Before allocating, check: does the \
-   scope you authored actually warrant this budget? If you're giving \
-   $1 of budget for a single specific question that a worker can \
-   answer in one pass, either broaden the scope (more dimensions to \
-   cover) or reduce the budget. Mismatched scope-and-budget means \
-   workers will under-utilize — they'll spend $0.15 on a $1 budget \
-   because the work only needs one pass. Match the budget to the \
-   work you're actually asking for.
+A. Role name — describes the population it examines, not a thesis.
+   Good: "low-download package analyst" (describes population)
+   Bad: "coordination pattern detector" (describes a thesis)
 
-Finally, author a SYNTHESIS ROLE. After your hires return, their findings \
-will be cross-referenced and combined. The synthesis role defines what \
-good cross-referencing looks like for this engagement. Same structure: \
-name, bar, heuristic. The bar should specify what cross-cutting patterns \
-are worth surfacing versus what is just restating individual findings.
+B. Why this hire exists — what this population segment reveals and why \
+   it requires cognition distinct from the other hires.
+
+C. Mission — what excellent work looks like for this segment. The \
+   charter's quality standards, applied to this specific population.
+
+D. Bar — minimum acceptable output, concrete enough to fail against.
+
+E. Heuristic — posture for ambiguous moments.
+
+F. Partition — the exact filter condition from your distributional_commit.
+
+G. Scope description — what this hire examines, grounded to the data \
+   they will actually see.
+
+H. Budget — each hire must receive at least ${leaf_viable_envelope:.2f}. \
+   Match the budget to the work you're actually asking for.
+
+Finally, author a SYNTHESIS ROLE for cross-referencing findings across \
+segments.
+</role_authoring_task>
 
 Proceed to Step 4 (output).
 
@@ -1700,6 +1722,13 @@ Return JSON:
         "bar_depth": "what depth of analysis the bar requires",
         "capacity_estimate": "can one pass cover this scope at this depth",
         "reasoning": "grounded decision — specific scope vs specific capacity vs specific bar"
+    }},
+    "distributional_commit": {{
+        "field": "the single field used for partitioning (only if hiring)",
+        "break_points": ["list of numeric break points"],
+        "partitions": [
+            {{"filter": "field condition", "estimated_records": "N"}}
+        ]
     }},
     "observations": [
         {{
@@ -1724,14 +1753,14 @@ Return JSON:
     "hire_directives": [
         {{
             "role": {{
-                "name": "role name — kind of cognition, not topic label",
+                "name": "population-descriptive name, not a thesis",
                 "mission": "what excellent work looks like — the aspiration, not the floor",
                 "success_bar": "minimum acceptable output — specific, judgeable, concrete enough to fail against",
                 "heuristic": "posture for ambiguous moments"
             }},
-            "justification": "what dimension of the work this hire covers and why it requires distinct cognition",
-            "partition": "filter condition over record fields that selects a non-overlapping slice of the corpus. Must use field names from the schema. Examples: 'maintainer_count = 1', 'monthly_downloads between 5000 and 100000', 'dependency_count > 10 AND maintainer_count <= 2'. NOT analytical lenses like 'coordination patterns' or 'temporal anomalies'.",
-            "scope_description": "what this hire investigates — grounded to the data they will actually see",
+            "justification": "what this population segment reveals",
+            "partition": "exact filter condition from distributional_commit",
+            "scope_description": "what this hire examines — grounded to data",
             "purpose": "why this hire is needed and what you need from them",
             "parent_context": "the evidence or reasoning that motivated this hire",
             "budget": 0.00
@@ -1758,6 +1787,7 @@ Return JSON:
         "capability_gaps": ["what was needed but unavailable"],
         "adjacent_findings": ["observations outside assigned scope"]
     }},
+    "fetch_records": ["record_id_1", "record_id_2"],
     "unresolved": ["things noticed but not investigated"],
     "broadcasts": [
         {{
@@ -1769,18 +1799,19 @@ Return JSON:
 }}
 
 RULES:
-- If you investigated: observations must be non-empty, hire_directives empty.
+- If you investigated: observations must be non-empty, hire_directives empty, \
+  distributional_commit empty or absent.
 - If you hired: hire_directives must be non-empty, observations empty.
 - Every observation must cite specific data with identifiers.
 - Every hire must have a concrete bar, not a vague one.
 - Never create exactly one hire. Either investigate alone or hire 2+.
 - Each hire must receive at least ${leaf_viable_envelope:.2f}.
+- If you hired: every hire's partition must match distributional_commit. \
+  Partitions use ONE field only. No multi-field conditions. \
+  The partition gate will HALT the run if partitions overlap or leave gaps.
 - broadcasts: observations worth sharing with the engagement. Not everything \
   — only what other nodes working on different slices would benefit from knowing. \
   DEAD_END posts are valuable: they save others from repeating failed approaches.
-- If you hired: your partitions MUST tile the corpus. Every record in exactly \
-  one partition, no overlaps, no gaps. Use field names and values from the schema. \
-  The partition gate will HALT the run if this is violated.
 
 Respond ONLY with valid JSON, no other text.
 """
@@ -1988,6 +2019,21 @@ INVESTIGATOR REPORTS:
 Your job is to cross-reference findings from all investigators. Hold every \
 synthesis decision against your role's bar before anything else.
 
+TREE STRUCTURE: Each investigator has a position (pos=1.1, pos=1.2, etc.) \
+and may be marked as a child of another investigator. Use this to judge \
+the strength of reinforcement:
+- INDEPENDENT CONVERGENCE: Two investigators on different branches (e.g. \
+  pos=1.1 and pos=1.3) finding the same pattern = strong evidence. They \
+  examined different data slices and reached the same conclusion.
+- HIERARCHICAL ECHO: A child investigator (pos=1.2.1, child of INVESTIGATOR 3) \
+  repeating what its parent found = NOT independent evidence. The child \
+  inherited context from the parent.
+- SIBLING AGREEMENT: Investigators with the same parent (pos=1.2.1 and \
+  pos=1.2.2) finding the same pattern = moderate evidence. They examined \
+  sub-slices of the same partition.
+
+Label each cross-cutting finding with its structural relationship type.
+
 1. Read all observations from all investigators.
 
 2. Cross-reference: For each observation, check if any other investigator's \
@@ -2026,6 +2072,7 @@ Return JSON:
             "pattern": "description",
             "evidence_chain": [{{"claim": "specific claim", "source": "source_id"}}],
             "confidence": 0.0,
+            "relationship_type": "independent_convergence | sibling_agreement | hierarchical_echo",
             "inferred_links": ["any links that are inference, not data"]
         }}
     ],

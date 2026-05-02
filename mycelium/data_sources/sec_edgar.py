@@ -14,6 +14,7 @@ Rate limit: SEC requires 10 req/sec max with User-Agent header.
 
 import asyncio
 import re
+from pathlib import Path as _Path
 import httpx
 from .base import DataSource
 
@@ -35,6 +36,10 @@ class SecEdgarSource(DataSource):
         self._last_call = 0.0
         self._index_cache = []  # cached quarterly index data
         self.source_name = "SEC EDGAR"
+
+    def catalog_path(self) -> _Path | None:
+        p = _Path("catalog/sec_enriched.jsonl")
+        return p if p.exists() and p.stat().st_size > 1000 else None
 
     async def _rate_limit(self):
         """100ms between API calls (10 req/sec SEC limit)."""

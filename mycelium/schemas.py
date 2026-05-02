@@ -138,6 +138,7 @@ class NodeResult:
     unresolved: list[str]
     raw_reasoning: str
     thinking: str = ""  # extended thinking chain-of-thought
+    tree_position: str = ""  # e.g. "1.2", "1.C1"
     token_usage: dict = field(default_factory=dict)
     cost: float = 0.0
 

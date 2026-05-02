@@ -9,6 +9,8 @@ Rate limit: be polite — 1 second between calls.
 """
 
 import asyncio
+import json
+from pathlib import Path as _Path
 import httpx
 from .base import DataSource
 
@@ -54,6 +56,7 @@ class FederalRegisterSource(DataSource):
     """Connector for the Federal Register API."""
 
     def __init__(self):
+        super().__init__()
         self.client = httpx.AsyncClient(timeout=30.0)
         self._last_call = 0.0
 
@@ -222,6 +225,78 @@ class FederalRegisterSource(DataSource):
             }
         except httpx.HTTPError as e:
             return {"id": doc_id, "error": str(e)}
+
+    def catalog_path(self) -> _Path | None:
+        p = _Path("catalog/federal_register_enriched.jsonl")
+        return p if p.exists() and p.stat().st_size > 1000 else None
+
+    async def fetch_bulk_metadata(self, max_records: int = 2000,
+                                   progress_callback=None) -> list[dict]:
+        """Fetch document metadata from the Federal Register API.
+
+        Caches to catalog/federal_register_enriched.jsonl.
+        Fetches recent documents across all types.
+        """
+        cache_path = _Path("catalog/federal_register_enriched.jsonl")
+        if cache_path.exists() and cache_path.stat().st_size > 1000:
+            print(f"  [CATALOG] Loading cached enrichment from {cache_path}...")
+            records = []
+            with open(cache_path) as f:
+                for line in f:
+                    if line.strip():
+                        records.append(json.loads(line))
+            if len(records) >= 100:
+                print(f"  [CATALOG] Loaded {len(records)} documents (cached)")
+                return records
+
+        print(f"  [CATALOG] Fetching up to {max_records} Federal Register documents...")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        records = []
+        page = 1
+
+        while len(records) < max_records:
+            params = {
+                "per_page": 100,
+                "page": page,
+                "order": "newest",
+                "fields[]": LIST_FIELDS,
+            }
+            try:
+                result = await self._get("/documents.json", params)
+            except httpx.HTTPError as e:
+                print(f"  [FR API] Error on page {page}: {e}")
+                break
+
+            for doc in result.get("results", []):
+                agency = _extract_agency(doc)
+                record = {
+                    "id": doc.get("document_number", ""),
+                    "title": doc.get("title", ""),
+                    "type": doc.get("type", ""),
+                    "abstract": doc.get("abstract", "") or "",
+                    "agency": agency,
+                    "date": doc.get("publication_date", ""),
+                    "url": doc.get("html_url", ""),
+                    "action": doc.get("action", "") or "",
+                    "page_length": doc.get("page_length", 0),
+                    "docket_ids": doc.get("docket_ids", []),
+                    "abstract_length": len(doc.get("abstract", "") or ""),
+                }
+                records.append(record)
+
+            if progress_callback:
+                progress_callback({"fetched": len(records), "total_estimated": max_records})
+
+            if not result.get("next_page_url") or len(result.get("results", [])) == 0:
+                break
+            page += 1
+
+        # Cache
+        with open(cache_path, "w") as f:
+            for r in records:
+                f.write(json.dumps(r, default=str) + "\n")
+        print(f"  [CATALOG] Cached {len(records)} documents to {cache_path}")
+        return records
 
     async def close(self):
         await self.client.aclose()

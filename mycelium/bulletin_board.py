@@ -78,9 +78,10 @@ class BulletinBoard:
         lines = []
         for p in posts:
             refs = f" [refs: {', '.join(p['references'])}]" if p["references"] else ""
+            content = p['content'] if p['post_type'] == 'EQUIP_BRIEFING' else p['content'][:2000]
             lines.append(
                 f"  [{p['post_type']}] by {p['author_role_name']} "
-                f"(post_id={p['post_id']}): {p['content'][:300]}{refs}"
+                f"(post_id={p['post_id']}): {content}{refs}"
             )
         return "\n".join(lines)
 

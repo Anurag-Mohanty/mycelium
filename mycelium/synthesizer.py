@@ -17,7 +17,8 @@ from . import prompts as _prompts
 async def synthesize(parent_result: NodeResult, children_results: list[NodeResult],
                      lenses: list[str], light: bool = False,
                      synthesis_role: dict = None,
-                     workspace_context: str = "") -> SynthesisResult:
+                     workspace_context: str = "",
+                     data_source=None) -> SynthesisResult:
     """Cross-reference observations from sibling nodes to find emergent patterns.
 
     Args:
@@ -92,11 +93,21 @@ async def synthesize(parent_result: NodeResult, children_results: list[NodeResul
             cost=cost,
         )
 
+    # Verify cross-cutting patterns against corpus if data source available
+    cross_cutting = result.get("cross_cutting_patterns", [])
+    if data_source and cross_cutting and hasattr(data_source, '_ensure_catalog_db'):
+        verified = _verify_cross_cutting(data_source, cross_cutting)
+        cross_cutting = verified["findings"]
+        verify_cost = verified["cost"]
+        cost += verify_cost
+        usage["input_tokens"] += verified.get("input_tokens", 0)
+        usage["output_tokens"] += verified.get("output_tokens", 0)
+
     synthesis = SynthesisResult(
         node_id=node_id,
         reinforced=result.get("reinforced", []),
         contradictions=result.get("contradictions", []),
-        cross_cutting=result.get("cross_cutting_patterns", []),
+        cross_cutting=cross_cutting,
         rescored_observations=all_observations,  # keep originals; rescoring is in the JSON
         discovered_questions=result.get("discovered_questions", []),
         unresolved_threads=result.get("unresolved_threads", []),
@@ -109,9 +120,18 @@ async def synthesize(parent_result: NodeResult, children_results: list[NodeResul
 
 
 def _format_investigator_reports(children: list[NodeResult]) -> str:
-    """Format children's results into the investigator report format."""
+    """Format children's results into the investigator report format.
+
+    Includes tree position and parent ID so synthesis can distinguish
+    independent convergence from hierarchical echo.
+    """
+    # Build parent lookup for structural annotations
+    id_to_pos = {c.node_id: c.tree_position for c in children if c.tree_position}
+    id_to_idx = {}
+
     reports = []
     for i, child in enumerate(children, 1):
+        id_to_idx[child.node_id] = i
         obs_text = []
         for obs in child.observations:
             obs_text.append(
@@ -129,8 +149,13 @@ def _format_investigator_reports(children: list[NodeResult]) -> str:
                 f"  - {u}" for u in child.unresolved
             )
 
+        # Tree structure annotation
+        pos = child.tree_position or "?"
+        parent_idx = id_to_idx.get(child.parent_id, None) if child.parent_id else None
+        parent_note = f", child of INVESTIGATOR {parent_idx}" if parent_idx else ""
+
         reports.append(
-            f"INVESTIGATOR {i} (assigned to: {child.scope_description}):\n"
+            f"INVESTIGATOR {i} (pos={pos}{parent_note}, assigned to: {child.scope_description}):\n"
             f"  Survey: {child.survey[:300]}\n\n"
             f"  Observations:\n" + "\n".join(obs_text) +
             unresolved_text
@@ -153,6 +178,81 @@ def _empty_synthesis(node_id: str) -> SynthesisResult:
         token_usage={},
         cost=0.0,
     )
+
+
+def _verify_cross_cutting(data_source, findings: list[dict]) -> dict:
+    """Verify cross-cutting patterns against the corpus database.
+
+    For each finding, extract key claims and run COUNT/SELECT queries
+    to check whether the pattern holds in the actual data.
+    """
+    import re
+    data_source._ensure_catalog_db()
+    db = data_source._catalog_db
+
+    # Get column names for query construction
+    try:
+        cursor = db.execute("PRAGMA table_info(records)")
+        columns = {row[1] for row in cursor.fetchall()}
+    except Exception:
+        columns = set()
+
+    id_cols = [c for c in ("name", "company", "title") if c in columns]
+
+    for finding in findings:
+        pattern = finding.get("pattern", "")
+        evidence_chain = finding.get("evidence_chain", [])
+
+        # Extract entity names from the finding for lookup
+        entities = set()
+        text = pattern + " " + " ".join(
+            c.get("claim", "") for c in evidence_chain if isinstance(c, dict))
+        for m in re.findall(r'\b([A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){1,2})\b', text):
+            entities.add(m)
+        for m in re.findall(r'\b([A-Z][A-Za-z]*(?:\s*&\s*[A-Z][A-Za-z]*)+)\b', text):
+            entities.add(m)
+
+        # Query corpus for each entity
+        verified_entities = []
+        for entity in list(entities)[:8]:
+            for col in id_cols:
+                try:
+                    rows = db.execute(
+                        f"SELECT {col}, * FROM records WHERE {col} LIKE ? LIMIT 2",
+                        (f"%{entity}%",)
+                    ).fetchall()
+                    if rows:
+                        rec = dict(rows[0])
+                        # Build a summary (skip huge text fields)
+                        summary_parts = []
+                        for k, v in rec.items():
+                            if v and str(v).strip() and len(str(v)) < 200:
+                                summary_parts.append(f"{k}={v}")
+                        verified_entities.append({
+                            "entity": entity,
+                            "found": True,
+                            "record_summary": ", ".join(summary_parts[:8]),
+                            "match_count": len(rows),
+                        })
+                        break
+                except Exception:
+                    continue
+
+        if verified_entities:
+            confirmed = sum(1 for v in verified_entities if v["found"])
+            total = len(verified_entities)
+            if confirmed == total:
+                finding["corpus_verification"] = "CONFIRMED"
+            elif confirmed > 0:
+                finding["corpus_verification"] = "PARTIAL"
+            else:
+                finding["corpus_verification"] = "UNVERIFIABLE"
+            finding["verified_entities"] = verified_entities
+        else:
+            finding["corpus_verification"] = "UNVERIFIABLE"
+            finding["verified_entities"] = []
+
+    return {"findings": findings, "cost": 0, "input_tokens": 0, "output_tokens": 0}
 
 
 def _parse_json(text: str) -> dict:

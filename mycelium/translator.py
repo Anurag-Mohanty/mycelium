@@ -27,6 +27,8 @@ class TranslationResult:
         self.interpretation = ""
         self.records = []
         self.record_count = 0
+        self.total_in_slice = None  # unlimited count of matching records (None = unknown)
+        self.slice_distributions = ""  # field distributions within the slice
         self.notes = []
         self.stages = []  # log of every stage fired
         self.cost = 0.0
@@ -38,6 +40,8 @@ class TranslationResult:
             "sql": self.sql,
             "interpretation": self.interpretation,
             "record_count": self.record_count,
+            "total_in_slice": self.total_in_slice,
+            "slice_distributions": self.slice_distributions[:200] if self.slice_distributions else "",
             "notes": self.notes,
             "stages": self.stages,
             "cost": self.cost,
@@ -144,6 +148,36 @@ async def translate_partition(
         result.stages.append({"stage": "final", "outcome": "CANNOT_TRANSLATE"})
         _save_log(result, partition, run_dir, hire_id, start_time)
         return result
+
+    # === Stage 3b: Unlimited count (slice cardinality) ===
+    try:
+        count_sql = re.sub(
+            r'^\s*SELECT\s+.+?\s+FROM\s+',
+            'SELECT COUNT(*) FROM ',
+            result.sql,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        # Strip any LIMIT from the count query
+        count_sql = re.sub(r'\s+LIMIT\s+\d+', '', count_sql, flags=re.IGNORECASE)
+        total = data_source._catalog_db.execute(count_sql).fetchone()[0]
+        result.total_in_slice = total
+    except Exception:
+        result.total_in_slice = None  # unknown — worker sees "100 of unknown"
+
+    # === Stage 3c: Slice distributions ===
+    try:
+        from .equip import _build_distributions
+        # Extract WHERE clause from the SQL for scoped distributions
+        where_match = re.search(r'WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|\s*$)',
+                                result.sql, re.IGNORECASE | re.DOTALL)
+        if where_match:
+            result.slice_distributions = _build_distributions(
+                data_source, where_clause=where_match.group(1).strip())
+        else:
+            result.slice_distributions = _build_distributions(data_source)
+    except Exception:
+        result.slice_distributions = ""
 
     # === Stage 4: Record count note (no revision) ===
     if result.record_count == 0:
